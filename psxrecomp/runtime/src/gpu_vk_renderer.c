@@ -44,6 +44,7 @@ void vk_renderer_present_blank(void){}
 void vk_renderer_sync_cpu(void){}
 void vk_renderer_restage_vram_after_savestate(void){}
 void vk_renderer_set_present_mode(int m){(void)m;}
+void vk_renderer_notify_window_resize(void) {}
 void vk_renderer_set_display_aspect(int n,int d){(void)n;(void)d;}
 int  vk_perf_json(char *out,int cap,int count){(void)count; return cap>2?snprintf(out,cap,"[]"):0;}
 const GpuRenderBackend *vk_backend_get(void) { return 0; }
