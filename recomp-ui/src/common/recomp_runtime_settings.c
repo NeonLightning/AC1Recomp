@@ -6,6 +6,10 @@
 static const char *const kFullscreenChoices[] = {
     "Windowed", "Borderless", "Exclusive"
 };
+static const char *const kWindowScaleChoices[] = {
+    "1x", "2x", "3x", "4x", "5x", "6x", "7x", "8x"
+};
+static const int kWindowScaleValues[] = { 1, 2, 3, 4, 5, 6, 7, 8 };
 static const char *const kTextureFilterChoices[] = { "Nearest", "Linear" };
 /* Order matches RECOMP_LAUNCHER_FMV_FILTER_* minus one (choice indices are
  * 0-based), least -> most smoothing. */
@@ -97,12 +101,14 @@ RecompRuntimeUi *recomp_runtime_ui_create_standard(
         add_item(items, &count, RECOMP_RUNTIME_UI_KEY_FULLSCREEN, "Display",
                  "Fullscreen", "Choose windowed or fullscreen output.",
                  RECOMP_RUNTIME_UI_CHOICE, 0, 2, 1, kFullscreenChoices, 3, NULL);
-    if (has(f, RECOMP_RUNTIME_UI_STANDARD_WINDOW_SCALE))
+    if (has(f, RECOMP_RUNTIME_UI_STANDARD_WINDOW_SCALE)) {
+        int max_scale = standard->window_scale_max > 0 ? standard->window_scale_max : 8;
+        if (max_scale > 8) max_scale = 8;
         add_item(items, &count, RECOMP_RUNTIME_UI_KEY_WINDOW_SCALE, "Display",
                  "Window scale", "Resize the window in native-size steps.",
-                 RECOMP_RUNTIME_UI_INT, 1,
-                 standard->window_scale_max > 0 ? standard->window_scale_max : 8,
-                 1, NULL, 0, NULL);
+                 RECOMP_RUNTIME_UI_CHOICE, 1, max_scale,
+                 1, kWindowScaleChoices, (size_t)max_scale, kWindowScaleValues);
+    }
     if (has(f, RECOMP_RUNTIME_UI_STANDARD_VIEW_MODE))
         add_item(items, &count, RECOMP_RUNTIME_UI_KEY_VIEW_MODE, "Display",
                  "View mode", "Native, fixed widescreen, or live window aspect.",

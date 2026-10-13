@@ -7946,6 +7946,8 @@ static int psx_overlay_ui_set_value(void* ctx, const RecompRuntimeUiItem* item, 
             g_fullscreen = 0;
             psx_window_fullscreen_set(sdl_window, &s_window_fullscreen, 0);
         }
+        s_window_fullscreen.width = width;
+        s_window_fullscreen.height = height;
         if (sdl_window) {
             SDL_SetWindowSize(sdl_window, width, height);
             vk_renderer_notify_window_resize();

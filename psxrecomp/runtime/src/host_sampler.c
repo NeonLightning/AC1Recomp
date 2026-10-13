@@ -44,6 +44,7 @@ static void record(uintptr_t pc) {
 #if defined(PSX_NO_DEBUG_TOOLS)
 /* Production builds carry no sampler: it reports unsupported. */
 void host_sampler_start(void) {}
+void host_sampler_stop(void) {}
 
 #elif defined(_WIN32)
 #include <windows.h>
@@ -103,6 +104,8 @@ void host_sampler_start(void) {
     CloseHandle(t);
     s_supported = 1;
 }
+
+void host_sampler_stop(void) {}
 
 #elif defined(__linux__) || defined(__APPLE__)
 #include <signal.h>
