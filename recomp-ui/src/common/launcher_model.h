@@ -119,6 +119,8 @@ typedef enum {
     LNG_HK_OPEN_LAUNCHER, /* this launcher, mid-game → [KeyMap] OpenLauncher;
                            * shown only when GameInfo.has_open_launcher_hotkey */
     LNG_HK_TURBO_TOGGLE, /* PSX press-to-latch fast-forward → [KeyMap] TurboToggle */
+    LNG_HK_SCANLINES, /* PSX scanline filter toggle → [KeyMap] Scanlines */
+    LNG_HK_MENU, /* PSX in-game menu → [KeyMap] Menu */
     LNG_HK_COUNT
 } LngHotkey;
 
@@ -703,6 +705,9 @@ typedef struct {
     bool      camera_capturing;  // capturing an enabled Voxel camera key
     int       capture_camera;    // LNG_CAMERA_* index
     bool      capture_assist;      // capture_btn indexes assist bindings
+    bool      assist_cap_armed;    // timed pad-combo capture window is running
+    double    assist_cap_t0;       // window start (ImGui time, seconds)
+    uint32_t  assist_cap_mask;     // buttons held now (bits 28/29 = L2/R2)
     bool      hk_capturing;      // capturing a system hotkey
     LngHotkey capture_hk;
     // Per-player bind-label display strings, indexed like capture_btn.

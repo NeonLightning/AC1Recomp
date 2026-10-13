@@ -5019,7 +5019,7 @@ void draw_hotkeys_controls(LauncherModel* m, const LauncherTheme& th) {
     // mid-game has anything to bind.
     if (m->has_open_launcher_hotkey) mask |= 1u << LNG_HK_OPEN_LAUNCHER;
     // Same responsive grid treatment as the bindings list.
-    const float cell_w = px(280.0f);
+    const float cell_w = px(240.0f);
     int cols = (int)(ImGui::GetContentRegionAvail().x / cell_w);
     cols = cols < 1 ? 1 : (cols > 3 ? 3 : cols);
     // Uniform label column: measure the widest bound hotkey name up front so
@@ -5032,7 +5032,7 @@ void draw_hotkeys_controls(LauncherModel* m, const LauncherTheme& th) {
         float w = ImGui::CalcTextSize(ui_text(launcher_hotkey_name((LngHotkey)h))).x;
         if (w > label_w) label_w = w;
     }
-    label_w += px(16.0f);   // gap between label and its bind button
+    label_w += px(10.0f);   // gap between label and its bind button
     if (ImGui::BeginTable("hk", cols)) {
         for (int h = 0; h < LNG_HK_COUNT; ++h) {
             if (!(mask & (1u << h))) continue;
@@ -5050,7 +5050,7 @@ void draw_hotkeys_controls(LauncherModel* m, const LauncherTheme& th) {
             const char* lbl = cap ? ui_text("[ press... ]")
                             : m->hotkeys[h][0] ? m->hotkeys[h] : ui_text("(unbound)");
             if (cap) ImGui::PushStyleColor(ImGuiCol_Button, col(th.accent));
-            if (ImGui::Button(lbl, ImVec2(px(130), 0)))
+            if (ImGui::Button(lbl, ImVec2(px(110), 0)))
                 launcher_model_begin_hk_capture(m, (LngHotkey)h);
             if (cap) ImGui::PopStyleColor();
             ImGui::PopID();
@@ -5229,6 +5229,8 @@ const char* settings_key_label(int scancode) {
 }
 
 static const char* settings_pad_button_label(int code) {
+    if (code == 28) return "l2";
+    if (code == 29) return "r2";
     const char* name = SDL_GetGamepadStringForButton((LNG_GamepadButton)code);
     if (!name || !name[0]) return "button";
     if (!std::strcmp(name, "back")) return "select";
@@ -5325,6 +5327,62 @@ static bool assist_pad_column_available(const LauncherModel* m) {
     return false;
 }
 
+/* PSX host shortcuts are keyboard-bound through config.ini [KeyMap] (the
+ * Hotkeys list), not assist_key_bind; map each row to its hotkey so the
+ * keyboard column shows and edits the real binding. -1 = not a PSX row. */
+static int assist_psx_hotkey(const LauncherModel* m, int action) {
+    const SystemProfile* prof = m ? (const SystemProfile*)m->profile : nullptr;
+    if (!(prof && prof->id && std::strcmp(prof->id, "psx") == 0)) return -1;
+    static const int kMap[] = {
+        LNG_HK_REWIND, LNG_HK_SAVE_STATE_MENU, LNG_HK_TURBO,
+        LNG_HK_TURBO_TOGGLE, LNG_HK_FULLSCREEN, LNG_HK_RESET,
+        LNG_HK_DISPLAY_PERF, LNG_HK_VOLUME_UP, LNG_HK_VOLUME_DOWN,
+        LNG_HK_SCANLINES, LNG_HK_MENU,
+    };
+    return action >= 0 && action < (int)(sizeof kMap / sizeof kMap[0]) ? kMap[action] : -1;
+}
+
+static bool draw_assist_key_button(LauncherModel* m, int action,
+                                   const char* capture_text, ImVec2 size) {
+    const int hk = assist_psx_hotkey(m, action);
+    const bool can_clear = !m->capturing && !m->hk_capturing;
+    if (hk >= 0) {
+        const bool cap = m->hk_capturing && m->capture_hk == (LngHotkey)hk;
+        const char* lbl = cap ? capture_text
+                        : m->hotkeys[hk][0] ? m->hotkeys[hk] : "(unbound)";
+        if (ImGui::Button(lbl, size)) launcher_model_begin_hk_capture(m, (LngHotkey)hk);
+        if (can_clear && ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Click to rebind, right-click to unbind");
+            if (ImGui::IsMouseReleased(ImGuiMouseButton_Right))
+                launcher_binds_set_hotkey(m, (LngHotkey)hk, 0, 0);
+        }
+        return true;
+    }
+    const bool capture_key = m->capturing && m->capture_assist &&
+                             !m->capture_pad && m->capture_btn == action;
+    if (ImGui::Button(capture_key ? capture_text
+                                  : settings_key_label(m->s.assist_key_bind[action]), size))
+        launcher_model_begin_assist_capture(m, action, false);
+    if (can_clear && ImGui::IsItemHovered() &&
+        ImGui::IsMouseReleased(ImGuiMouseButton_Right))
+        m->s.assist_key_bind[action] = 0;
+    return false;
+}
+
+static const char* assist_pad_capture_text(const LauncherModel* m, char* buf, size_t cap) {
+    double left = 3.0 - (m->assist_cap_armed ? ImGui::GetTime() - m->assist_cap_t0 : 0.0);
+    if (left < 0.0) left = 0.0;
+    snprintf(buf, cap, "[ hold buttons... %d ]", (int)left + (left > (int)left ? 1 : 0));
+    return buf;
+}
+
+static void assist_pad_right_click_unbind(LauncherModel* m, int action) {
+    if (m->capturing || m->hk_capturing || !ImGui::IsItemHovered()) return;
+    ImGui::SetTooltip("Click to rebind, right-click to unbind");
+    if (ImGui::IsMouseReleased(ImGuiMouseButton_Right))
+        m->s.assist_pad_bind[action] = 0;
+}
+
 static void draw_assist_pad_unavailable_hint(const LauncherModel* m,
                                              const LauncherTheme& th) {
     if (!m) return;
@@ -5375,9 +5433,9 @@ void draw_assist_binding_editor(LauncherModel* m, const LauncherTheme& th,
                           ImGuiTableFlags_SizingFixedFit |
                               ImGuiTableFlags_RowBg)) {
         ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed,
-                                px(150));
+                                px(130));
         ImGui::TableSetupColumn("Keyboard", ImGuiTableColumnFlags_WidthFixed,
-                                px(180));
+                                px(130));
         if (pad_col)
             ImGui::TableSetupColumn("Controller", ImGuiTableColumnFlags_WidthFixed,
                                     px(180));
@@ -5391,30 +5449,27 @@ void draw_assist_binding_editor(LauncherModel* m, const LauncherTheme& th,
             ImGui::AlignTextToFramePadding();
             ImGui::TextUnformatted(m->assist_binding_labels[action]);
             ImGui::TableSetColumnIndex(1);
-            bool capture_key = m->capturing && m->capture_assist &&
-                               !m->capture_pad && m->capture_btn == action;
             /* The two cells of a row are both Buttons whose ID is their
              * label, and a row with nothing bound in either column showed
              * "(unbound)" twice -- the same ID, and Dear ImGui's conflict
              * warning over the Fast-forward toggle row. Scope each column. */
             ImGui::PushID("key");
-            if (ImGui::Button(
-                    capture_key ? "[ press a key... ]" :
-                        settings_key_label(m->s.assist_key_bind[action]),
-                    ImVec2(px(170), 0)))
-                launcher_model_begin_assist_capture(m, action, false);
+            draw_assist_key_button(m, action, "[ press a key... ]",
+                                   ImVec2(px(120), 0));
             ImGui::PopID();
             if (pad_col) {
                 ImGui::TableSetColumnIndex(2);
                 bool capture_pad = m->capturing && m->capture_assist &&
                                    m->capture_pad && m->capture_btn == action;
                 char pad[112];
+                char cap_text[40];
                 assist_pad_label(m, m->s.assist_pad_bind[action], pad, sizeof pad);
                 ImGui::PushID("pad");
                 if (ImGui::Button(
-                        capture_pad ? "[ press a button... ]" : pad,
+                        capture_pad ? assist_pad_capture_text(m, cap_text, sizeof cap_text) : pad,
                         ImVec2(px(170), 0)))
                     launcher_model_begin_assist_capture(m, action, true);
+                assist_pad_right_click_unbind(m, action);
                 ImGui::PopID();
             }
             ImGui::PopID();
@@ -5460,26 +5515,23 @@ void draw_controller_assist_shortcuts(LauncherModel* m,
             ImGui::AlignTextToFramePadding();
             ImGui::TextUnformatted(m->assist_binding_labels[action]);
             ImGui::TableSetColumnIndex(1);
-            bool capture_key = m->capturing && m->capture_assist &&
-                               !m->capture_pad && m->capture_btn == action;
             /* Per-column IDs: see draw_assist_binding_editor. */
             ImGui::PushID("key");
-            if (ImGui::Button(
-                    capture_key ? "[ key... ]" :
-                        settings_key_label(m->s.assist_key_bind[action]),
-                    ImVec2(-FLT_MIN, 0)))
-                launcher_model_begin_assist_capture(m, action, false);
+            draw_assist_key_button(m, action, "[ key... ]",
+                                   ImVec2(-FLT_MIN, 0));
             ImGui::PopID();
             if (pad_col) {
                 ImGui::TableSetColumnIndex(2);
                 bool capture_pad = m->capturing && m->capture_assist &&
                                    m->capture_pad && m->capture_btn == action;
                 char pad[112];
+                char cap_text[40];
                 assist_pad_label(m, m->s.assist_pad_bind[action], pad, sizeof pad);
                 ImGui::PushID("pad");
-                if (ImGui::Button(capture_pad ? "[ button... ]" : pad,
+                if (ImGui::Button(capture_pad ? assist_pad_capture_text(m, cap_text, sizeof cap_text) : pad,
                                   ImVec2(-FLT_MIN, 0)))
                     launcher_model_begin_assist_capture(m, action, true);
+                assist_pad_right_click_unbind(m, action);
                 ImGui::PopID();
             }
             ImGui::PopID();
@@ -6163,13 +6215,13 @@ void draw_controller_config_view(LauncherModel* m, const LauncherTheme& th) {
                 // it to clear it: without a per-slot clear the only way to
                 // drop one bind was Reset to Defaults, which wipes the whole
                 // player.
-                float label_col_w = px(90.0f);
+                float label_col_w = px(56.0f);
                 for (int i = 0; i < LNG_PSX_PAD_BUTTON_COUNT; ++i) {
-                    float w = ImGui::CalcTextSize(spec.buttons[i].label).x + px(20.0f);
+                    float w = ImGui::CalcTextSize(spec.buttons[i].label).x + px(12.0f);
                     if (w > label_col_w) label_col_w = w;
                 }
-                const float chip_w = px(112.0f);
-                const float chip_gap = px(6.0f);
+                const float chip_w = px(86.0f);
+                const float chip_gap = px(4.0f);
                 // Duplicate-bind detection across this player's table, both
                 // slots. Duplicates stay ALLOWED (one key on two inputs is a
                 // legitimate choice); the warn colour just makes an accidental
@@ -6183,7 +6235,7 @@ void draw_controller_config_view(LauncherModel* m, const LauncherTheme& th) {
                     }
                     return n;
                 };
-                const float cell_w = label_col_w + 2.0f * chip_w + chip_gap + px(16.0f);
+                const float cell_w = label_col_w + 2.0f * chip_w + chip_gap + px(8.0f);
                 if (ImGui::BeginTable("psx_key_binds", LNG_PSX_GAMEPAD_BIND_COLS,
                                       ImGuiTableFlags_SizingFixedFit)) {
                     for (int c = 0; c < LNG_PSX_GAMEPAD_BIND_COLS; ++c)
@@ -6279,8 +6331,7 @@ void draw_controller_config_view(LauncherModel* m, const LauncherTheme& th) {
                 static double s_kb_profile_saved_until = 0.0;
                 {
                     const float save_w = px(120.0f);
-                    const float right = ImGui::GetWindowContentRegionMax().x;
-                    ImGui::SameLine(right - save_w);
+                    ImGui::SameLine();
                     if (ImGui::Button("Save Profile", ImVec2(save_w, 0))) {
                         launcher_binds_save_psx_keyboard(m, p + 1);
                         s_kb_profile_saved_until = ImGui::GetTime() + 2.5;
@@ -6301,13 +6352,13 @@ void draw_controller_config_view(LauncherModel* m, const LauncherTheme& th) {
                 if (ImGui::GetTime() < s_kb_profile_saved_until)
                     ImGui::TextColored(col(th.accent2), "Input Profile Saved!");
             } else {
-                float label_col_w = px(90.0f);
+                float label_col_w = px(56.0f);
                 for (int i = 0; i < LNG_PSX_PAD_BUTTON_COUNT; ++i) {
-                    float w = ImGui::CalcTextSize(spec.buttons[i].label).x + px(20.0f);
+                    float w = ImGui::CalcTextSize(spec.buttons[i].label).x + px(12.0f);
                     if (w > label_col_w) label_col_w = w;
                 }
-                const float chip_w = px(140.0f);
-                const float cell_w = label_col_w + chip_w + px(16.0f);
+                const float chip_w = px(120.0f);
+                const float cell_w = label_col_w + chip_w + px(8.0f);
                 if (ImGui::BeginTable("psx_pad_binds", LNG_PSX_GAMEPAD_BIND_COLS,
                                       ImGuiTableFlags_SizingFixedFit)) {
                     for (int c = 0; c < LNG_PSX_GAMEPAD_BIND_COLS; ++c)
@@ -6364,8 +6415,7 @@ void draw_controller_config_view(LauncherModel* m, const LauncherTheme& th) {
                 static double s_profile_saved_until = 0.0;
                 {
                     const float save_w = px(120.0f);
-                    const float right = ImGui::GetWindowContentRegionMax().x;
-                    ImGui::SameLine(right - save_w);
+                    ImGui::SameLine();
                     if (ImGui::Button("Save Profile", ImVec2(save_w, 0))) {
                         launcher_binds_save_psx_gamepad(m, p + 1);
                         s_profile_saved_until = ImGui::GetTime() + 2.5;
@@ -14401,33 +14451,38 @@ bool try_capture(LauncherModel* m, const SDL_Event& ev) {
     // the player's selected Input source device.
     if (m->capturing && m->capture_pad) {
         if (m->settings_bindings && m->capture_assist) {
-            if (ev.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
+            /* Held buttons (and L2/R2 as virtual bits 28/29) are tracked here and
+             * committed when the timed window ends (see the per-frame hook). */
+            const uint32_t want_id = m->player_pad_id[0];
+            if (ev.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN ||
+                ev.type == SDL_EVENT_GAMEPAD_BUTTON_UP) {
                 const int button = (int)LNG_EVGBTN(ev);
-                uint32_t mask = launcher_input_gamepad_button_mask(
-                    (uint32_t)LNG_EVGBTNWHICH(ev));
-                if (button >= 0 && button < 32)
-                    mask |= (uint32_t)1u << button;
-                if (button_mask_count(mask) >= 2) {
-                    launcher_model_set_captured_pad(
-                        m, RECOMP_LAUNCHER_PAD_BUTTON_COMBO((int)mask));
-                    launcher_model_cancel_capture(m);
-                    return true;
+                if ((!want_id || (uint32_t)LNG_EVGBTNWHICH(ev) == want_id) &&
+                    button >= 0 && button < 28) {
+                    if (ev.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN)
+                        m->assist_cap_mask |= (uint32_t)1u << button;
+                    else
+                        m->assist_cap_mask &= ~((uint32_t)1u << button);
                 }
-                if (settings_pad_button_is_select(button))
-                    return true;
-                launcher_model_set_captured_pad(
-                    m, launcher_model_assist_pad_button_capture_binding(
-                           m, m->capture_btn, button));
-                launcher_model_cancel_capture(m);
                 return true;
             }
             if (ev.type == SDL_EVENT_GAMEPAD_AXIS_MOTION) {
+                if (want_id && (uint32_t)LNG_EVGAXISWHICH(ev) != want_id)
+                    return true;
+                const int axis = (int)LNG_EVGAXIS(ev);
                 const int val = (int)LNG_EVGAXISVAL(ev);
-                if (val >= 20000 || val <= -20000) {
-                    launcher_model_set_captured_pad(
-                        m, RECOMP_LAUNCHER_PAD_AXIS(
-                               (int)LNG_EVGAXIS(ev), val > 0));
-                    launcher_model_cancel_capture(m);
+#if defined(LNG_SDL3)
+                const int lt = (int)SDL_GAMEPAD_AXIS_LEFT_TRIGGER;
+                const int rt = (int)SDL_GAMEPAD_AXIS_RIGHT_TRIGGER;
+#else
+                const int lt = (int)SDL_CONTROLLER_AXIS_TRIGGERLEFT;
+                const int rt = (int)SDL_CONTROLLER_AXIS_TRIGGERRIGHT;
+#endif
+                const uint32_t bit = axis == lt ? (1u << 28)
+                                   : axis == rt ? (1u << 29) : 0u;
+                if (bit) {
+                    if (val >= 20000) m->assist_cap_mask |= bit;
+                    else if (val < 8000) m->assist_cap_mask &= ~bit;
                 }
                 return true;
             }
@@ -15005,6 +15060,26 @@ extern "C" LngAction launcher_backend_run(LauncherPlatform* p,
                 const uint32_t id = m->player_pad_id[m->cfg_player];
                 if (id && launcher_input_gamepad_at_rest(id))
                     m->map_all_wait_release = false;
+            }
+
+            // Timed combo capture: hold the buttons for 3 s; whatever is held
+            // at the end becomes the bind, nothing held leaves it unchanged.
+            if (m->capturing && m->capture_pad && m->capture_assist &&
+                m->settings_bindings) {
+                const double now = ImGui::GetTime();
+                if (!m->assist_cap_armed) {
+                    m->assist_cap_armed = true;
+                    m->assist_cap_t0 = now;
+                    m->assist_cap_mask = 0;
+                } else if (now - m->assist_cap_t0 >= 3.0) {
+                    const uint32_t mask = m->assist_cap_mask;
+                    if (mask)
+                        launcher_model_set_captured_pad(
+                            m, RECOMP_LAUNCHER_PAD_BUTTON_COMBO((int)mask));
+                    launcher_model_cancel_capture(m);
+                }
+            } else {
+                m->assist_cap_armed = false;
             }
 
             // PSX D-pad poll fallback: some Windows Xbox backends miss

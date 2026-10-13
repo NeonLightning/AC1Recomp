@@ -1571,6 +1571,13 @@ struct UserSettings {
     // keyboard [KeyMap] Turbo (Tab). 0 = unbound.
     bool has_hotkey_pad_fast_forward = false; int hotkey_pad_fast_forward = 1528; /* select+l1 */
     bool has_hotkey_pad_fast_forward_toggle = false; int hotkey_pad_fast_forward_toggle = 0; /* unbound */
+    bool has_hotkey_pad_fullscreen = false; int hotkey_pad_fullscreen = 0; /* unbound */
+    bool has_hotkey_pad_restart = false; int hotkey_pad_restart = 0; /* unbound */
+    bool has_hotkey_pad_display_perf = false; int hotkey_pad_display_perf = 0; /* unbound */
+    bool has_hotkey_pad_volume_up = false; int hotkey_pad_volume_up = 0; /* unbound */
+    bool has_hotkey_pad_volume_down = false; int hotkey_pad_volume_down = 0; /* unbound */
+    bool has_hotkey_pad_scanlines = false; int hotkey_pad_scanlines = 0; /* unbound */
+    bool has_hotkey_pad_menu = false; int hotkey_pad_menu = 1032; /* guide button */
     // [audio]
     bool has_audio_enabled   = false; bool audio_enabled = true;
     bool has_audio_volume    = false; int audio_volume = 100;

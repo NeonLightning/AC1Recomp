@@ -3076,6 +3076,55 @@ UserSettings load_user_settings(const fs::path& path) {
                 s.has_hotkey_pad_fast_forward_toggle = true;
             }
         });
+        if (h.contains("fullscreen_pad")) try_get([&]{
+            const auto n = toml::find<int64_t>(h, "fullscreen_pad");
+            if (pad_bind_value_ok(n)) {
+                s.hotkey_pad_fullscreen = (int)n;
+                s.has_hotkey_pad_fullscreen = true;
+            }
+        });
+        if (h.contains("restart_pad")) try_get([&]{
+            const auto n = toml::find<int64_t>(h, "restart_pad");
+            if (pad_bind_value_ok(n)) {
+                s.hotkey_pad_restart = (int)n;
+                s.has_hotkey_pad_restart = true;
+            }
+        });
+        if (h.contains("fps_pad")) try_get([&]{
+            const auto n = toml::find<int64_t>(h, "fps_pad");
+            if (pad_bind_value_ok(n)) {
+                s.hotkey_pad_display_perf = (int)n;
+                s.has_hotkey_pad_display_perf = true;
+            }
+        });
+        if (h.contains("volume_up_pad")) try_get([&]{
+            const auto n = toml::find<int64_t>(h, "volume_up_pad");
+            if (pad_bind_value_ok(n)) {
+                s.hotkey_pad_volume_up = (int)n;
+                s.has_hotkey_pad_volume_up = true;
+            }
+        });
+        if (h.contains("volume_down_pad")) try_get([&]{
+            const auto n = toml::find<int64_t>(h, "volume_down_pad");
+            if (pad_bind_value_ok(n)) {
+                s.hotkey_pad_volume_down = (int)n;
+                s.has_hotkey_pad_volume_down = true;
+            }
+        });
+        if (h.contains("scanlines_pad")) try_get([&]{
+            const auto n = toml::find<int64_t>(h, "scanlines_pad");
+            if (pad_bind_value_ok(n)) {
+                s.hotkey_pad_scanlines = (int)n;
+                s.has_hotkey_pad_scanlines = true;
+            }
+        });
+        if (h.contains("menu_pad")) try_get([&]{
+            const auto n = toml::find<int64_t>(h, "menu_pad");
+            if (pad_bind_value_ok(n)) {
+                s.hotkey_pad_menu = (int)n;
+                s.has_hotkey_pad_menu = true;
+            }
+        });
     }
     if (doc.contains("launcher")) {
         const toml::value& l = toml::find(doc, "launcher");
@@ -3379,7 +3428,11 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
         f << "slot = " << s.savestate_slot << "\n";
     }
     if (s.has_hotkey_pad_rewind || s.has_hotkey_pad_save_state_menu ||
-        s.has_hotkey_pad_fast_forward || s.has_hotkey_pad_fast_forward_toggle) {
+        s.has_hotkey_pad_fast_forward || s.has_hotkey_pad_fast_forward_toggle ||
+        s.has_hotkey_pad_fullscreen || s.has_hotkey_pad_restart ||
+        s.has_hotkey_pad_display_perf || s.has_hotkey_pad_volume_up ||
+        s.has_hotkey_pad_volume_down || s.has_hotkey_pad_scanlines ||
+        s.has_hotkey_pad_menu) {
         f << "\n[hotkeys]\n";
         if (s.has_hotkey_pad_rewind)
             f << "rewind_pad = " << s.hotkey_pad_rewind << "\n";
@@ -3391,6 +3444,20 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
         if (s.has_hotkey_pad_fast_forward_toggle)
             f << "fast_forward_toggle_pad = "
               << s.hotkey_pad_fast_forward_toggle << "\n";
+        if (s.has_hotkey_pad_fullscreen)
+            f << "fullscreen_pad = " << s.hotkey_pad_fullscreen << "\n";
+        if (s.has_hotkey_pad_restart)
+            f << "restart_pad = " << s.hotkey_pad_restart << "\n";
+        if (s.has_hotkey_pad_display_perf)
+            f << "fps_pad = " << s.hotkey_pad_display_perf << "\n";
+        if (s.has_hotkey_pad_volume_up)
+            f << "volume_up_pad = " << s.hotkey_pad_volume_up << "\n";
+        if (s.has_hotkey_pad_volume_down)
+            f << "volume_down_pad = " << s.hotkey_pad_volume_down << "\n";
+        if (s.has_hotkey_pad_scanlines)
+            f << "scanlines_pad = " << s.hotkey_pad_scanlines << "\n";
+        if (s.has_hotkey_pad_menu)
+            f << "menu_pad = " << s.hotkey_pad_menu << "\n";
     }
     if (s.has_skip_launcher)
         f << "\n[launcher]\nskip_launcher = " << (s.skip_launcher ? "true" : "false") << "\n";

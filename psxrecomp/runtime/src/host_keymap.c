@@ -112,6 +112,10 @@ static void apply_defaults(void) {
         add_bind(HOST_KEYMAP_TURBO_TOGGLE, (int)SDLK_F9, (int)SDL_SCANCODE_F9, 0);
     if (want_default(HOST_KEYMAP_CAPTURE_MARK))
         add_bind(HOST_KEYMAP_CAPTURE_MARK, (int)SDLK_m, (int)SDL_SCANCODE_M, KMOD_CTRL);
+    if (want_default(HOST_KEYMAP_RESTART))
+        add_bind(HOST_KEYMAP_RESTART, (int)SDLK_r, (int)SDL_SCANCODE_R, KMOD_CTRL);
+    if (want_default(HOST_KEYMAP_MENU))
+        add_bind(HOST_KEYMAP_MENU, (int)SDLK_ESCAPE, (int)SDL_SCANCODE_ESCAPE, 0);
 }
 
 /* Parse one "Ctrl+Alt+PageUp" token into key+mods. */
@@ -172,6 +176,8 @@ static HostKeymapAction action_for_key(const char *name) {
     if (ieq(name, "Scanlines")) return HOST_KEYMAP_SCANLINES;
     if (ieq(name, "TurboToggle")) return HOST_KEYMAP_TURBO_TOGGLE;
     if (ieq(name, "CaptureMark")) return HOST_KEYMAP_CAPTURE_MARK;
+    if (ieq(name, "Reset")) return HOST_KEYMAP_RESTART;
+    if (ieq(name, "Menu")) return HOST_KEYMAP_MENU;
     return HOST_KEYMAP_ACTION_COUNT;
 }
 

@@ -1434,6 +1434,13 @@ static int           g_hotkey_pad_rewind = 1272;       /* select + r3 */
 static int           g_hotkey_pad_save_state_menu = 2040;/* select + r1 */
 static int           g_hotkey_pad_fast_forward = 1528;   /* select + l1 (hold) */
 static int           g_hotkey_pad_fast_forward_toggle = 0; /* unbound: latch fast-forward */
+static int           g_hotkey_pad_fullscreen = 0;          /* unbound */
+static int           g_hotkey_pad_restart = 0;             /* unbound */
+static int           g_hotkey_pad_display_perf = 0;        /* unbound */
+static int           g_hotkey_pad_volume_up = 0;           /* unbound */
+static int           g_hotkey_pad_volume_down = 0;         /* unbound */
+static int           g_hotkey_pad_scanlines = 0;           /* unbound */
+static int           g_hotkey_pad_menu = 1000 + (1 << SDL_CONTROLLER_BUTTON_GUIDE); /* Guide */
 /* Direct host shortcuts the running title allows (bit per PSX_MOD_SHORTCUT_*,
  * psx_mod_allow_direct_shortcut); cleared at every mod session start. */
 static uint32_t      g_direct_shortcut_allowed = 0;
@@ -5577,6 +5584,13 @@ static uint16_t controller_pad_buttons(const ControllerMap& map,
                 source.id >= 0 && source.id < 32 &&
                 (claimed_buttons & (1u << source.id)))
                 continue;
+            if (claimed_buttons &&
+                source.kind == ControllerSource::Kind::AxisPositive &&
+                ((source.id == SDL_CONTROLLER_AXIS_TRIGGERLEFT &&
+                  (claimed_buttons & (1u << 28))) ||
+                 (source.id == SDL_CONTROLLER_AXIS_TRIGGERRIGHT &&
+                  (claimed_buttons & (1u << 29)))))
+                continue;
             if (!controller_source_pressed_h(h, source, deadzone_raw)) continue;
             if (bit)
                 buttons &= (uint16_t)~bit;
@@ -7558,6 +7572,13 @@ enum {
     PSX_ASSIST_BIND_SAVE_STATE_MENU,
     PSX_ASSIST_BIND_FAST_FORWARD,   /* hold-to-fast-forward; pad twin of [KeyMap] Turbo */
     PSX_ASSIST_BIND_FAST_FORWARD_TOGGLE, /* press-to-latch; pad twin of [KeyMap] TurboToggle */
+    PSX_ASSIST_BIND_FULLSCREEN,     /* pad twin of [KeyMap] Fullscreen */
+    PSX_ASSIST_BIND_RESTART,        /* pad twin of [KeyMap] Reset */
+    PSX_ASSIST_BIND_DISPLAY_PERF,   /* pad twin of [KeyMap] DisplayPerf */
+    PSX_ASSIST_BIND_VOLUME_UP,      /* pad twin of [KeyMap] VolumeUp */
+    PSX_ASSIST_BIND_VOLUME_DOWN,    /* pad twin of [KeyMap] VolumeDown */
+    PSX_ASSIST_BIND_SCANLINES,      /* pad twin of [KeyMap] Scanlines */
+    PSX_ASSIST_BIND_MENU,           /* pad twin of [KeyMap] Menu; direct (no Select) */
     PSX_ASSIST_BIND_COUNT
 };
 
@@ -7576,6 +7597,8 @@ enum {
 #define PSX_HOTKEY_PAD_SELECT_R1 \
     PSX_HOTKEY_PAD_BUTTON_COMBO(((uint32_t)1u << SDL_CONTROLLER_BUTTON_BACK) | \
                                 ((uint32_t)1u << SDL_CONTROLLER_BUTTON_RIGHTSHOULDER))
+#define PSX_HOTKEY_PAD_MENU_DEFAULT \
+    PSX_HOTKEY_PAD_BUTTON_COMBO((uint32_t)1u << SDL_CONTROLLER_BUTTON_GUIDE)
 #define PSX_HOTKEY_PAD_SELECT_L1 \
     PSX_HOTKEY_PAD_BUTTON_COMBO(((uint32_t)1u << SDL_CONTROLLER_BUTTON_BACK) | \
                                 ((uint32_t)1u << SDL_CONTROLLER_BUTTON_LEFTSHOULDER))
@@ -7601,7 +7624,17 @@ static int normalize_hotkey_pad_binding(int binding, int fallback) {
 
 /* P1 host controller state for shortcut polling: the debug host layer while
  * armed, else P1's assigned SDL gamepad. */
+static int p1_host_axis_value(void*, int axis);
+
+/* Combo bits 28/29 stand for the analog L2/R2 triggers (recomp-ui encodes them so). */
+#define PSX_HOTKEY_PAD_BIT_LT 28
+#define PSX_HOTKEY_PAD_BIT_RT 29
+
 static int p1_host_button_down(void*, int code) {
+    if (code == PSX_HOTKEY_PAD_BIT_LT)
+        return p1_host_axis_value(nullptr, SDL_CONTROLLER_AXIS_TRIGGERLEFT) > 16000;
+    if (code == PSX_HOTKEY_PAD_BIT_RT)
+        return p1_host_axis_value(nullptr, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) > 16000;
     uint16_t word;
     uint8_t st[4], lt, rt;
     if (host_pad_layer(&word, st, &lt, &rt))
@@ -7647,13 +7680,23 @@ static int direct_shortcut_active(int shortcut) {
         psx_rewind_title_blocked());
 }
 
+/* A button combination is exactly what the player held when binding it, so
+ * it is direct (no implied Select); legacy single-button/axis values stay
+ * Select-chorded unless the title allows them directly. */
+static int hotkey_binding_direct(int shortcut, int binding) {
+    if (direct_shortcut_active(shortcut)) return 1;
+    if (binding < PSX_HOTKEY_PAD_COMBO_BASE) return 0;
+    if (shortcut == PSX_ASSIST_BIND_REWIND)
+        return g_rewind_enabled && !psx_rewind_title_blocked();
+    return 1;
+}
+
 /* Whether host shortcut `shortcut` (PSX_ASSIST_BIND_*) bound to `binding` is
- * held. A one-button combination is direct only while the title allows that
- * shortcut; otherwise it is Select + button, like the legacy encoding. */
+ * held. */
 static int hotkey_shortcut_down(int shortcut, int binding) {
     if (!p1_host_present() || binding == 0)
         return 0;
-    const int direct = direct_shortcut_active(shortcut);
+    const int direct = hotkey_binding_direct(shortcut, binding);
     return psx_hotkey_pad_down(binding, direct, SDL_CONTROLLER_BUTTON_BACK,
                                p1_host_button_down, p1_host_axis_value,
                                nullptr);
@@ -7667,14 +7710,17 @@ static void direct_shortcut_claim_update(void) {
     const int bindings[PSX_ASSIST_BIND_COUNT] = {
         g_hotkey_pad_rewind, g_hotkey_pad_save_state_menu,
         g_hotkey_pad_fast_forward, g_hotkey_pad_fast_forward_toggle,
+        g_hotkey_pad_fullscreen, g_hotkey_pad_restart,
+        g_hotkey_pad_display_perf, g_hotkey_pad_volume_up,
+        g_hotkey_pad_volume_down, g_hotkey_pad_scanlines, g_hotkey_pad_menu,
     };
     uint32_t claimed = 0, held = 0;
     for (int i = 0; i < PSX_ASSIST_BIND_COUNT; ++i) {
-        if (!direct_shortcut_active(i)) continue;
+        if (!hotkey_binding_direct(i, bindings[i])) continue;
         const int b = psx_hotkey_pad_single_button(bindings[i]);
         if (b >= 0) claimed |= 1u << b;
     }
-    for (int code = 0; code < SDL_CONTROLLER_BUTTON_MAX && code < 32; ++code)
+    for (int code = 0; code < 32; ++code)
         if (p1_host_button_down(nullptr, code)) held |= 1u << code;
     g_p1_claimed_buttons =
         psx_hotkey_claim_update(&g_p1_claim_latched, claimed, held);
@@ -7686,6 +7732,13 @@ static int* hotkey_pad_binding_slot(int shortcut) {
     case PSX_ASSIST_BIND_SAVE_STATE_MENU: return &g_hotkey_pad_save_state_menu;
     case PSX_ASSIST_BIND_FAST_FORWARD: return &g_hotkey_pad_fast_forward;
     case PSX_ASSIST_BIND_FAST_FORWARD_TOGGLE: return &g_hotkey_pad_fast_forward_toggle;
+    case PSX_ASSIST_BIND_FULLSCREEN: return &g_hotkey_pad_fullscreen;
+    case PSX_ASSIST_BIND_RESTART: return &g_hotkey_pad_restart;
+    case PSX_ASSIST_BIND_DISPLAY_PERF: return &g_hotkey_pad_display_perf;
+    case PSX_ASSIST_BIND_VOLUME_UP: return &g_hotkey_pad_volume_up;
+    case PSX_ASSIST_BIND_VOLUME_DOWN: return &g_hotkey_pad_volume_down;
+    case PSX_ASSIST_BIND_SCANLINES: return &g_hotkey_pad_scanlines;
+    case PSX_ASSIST_BIND_MENU: return &g_hotkey_pad_menu;
     default: return nullptr;
     }
 }
@@ -7697,6 +7750,7 @@ static void apply_title_direct_shortcut(const std::string& shortcut,
                                         const std::string& button) {
     static const char* const kNames[PSX_ASSIST_BIND_COUNT] = {
         "rewind", "save_state_menu", "fast_forward", "fast_forward_toggle",
+        "fullscreen", "restart", "fps", "volume_up", "volume_down", "scanlines", "menu",
     };
     int index = -1;
     for (int i = 0; i < PSX_ASSIST_BIND_COUNT; ++i)
@@ -8352,12 +8406,15 @@ static void psx_overlay_toggle(SDL_Keycode opened_by_key) {
     recomp_runtime_ui_open(g_psx_overlay_ui);
 }
 
+static int psx_menu_pad_down(void) {
+    if (!p1_host_present()) return 0;
+    return psx_hotkey_pad_down(g_hotkey_pad_menu, 1, SDL_CONTROLLER_BUTTON_BACK,
+                               p1_host_button_down, p1_host_axis_value, nullptr);
+}
+
 static void psx_overlay_poll_toggle_buttons(void) {
     static int was_guide_down = 0;
-    int guide_down = 0;
-    SDL_GameController *h = g_players[0].handle;
-    if (h && SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_GUIDE))
-        guide_down = 1;
+    const int guide_down = psx_menu_pad_down();
     if (guide_down && !was_guide_down && !psx_rewind_is_open() && !savestate_menu_open)
         psx_overlay_toggle(0);
     was_guide_down = guide_down;
@@ -8368,11 +8425,10 @@ static void psx_overlay_host_pause_loop(void) {
     psx_local_mouse_reset();
     freeze_heartbeat_set_paused(1);
     /* Buttons held at open time (e.g. the Guide press that opened us) must not count as new presses. */
-    int prev_a = 0, prev_b = 0, prev_guide = 0;
+    int prev_a = 0, prev_b = 0, prev_guide = psx_menu_pad_down();
     if (SDL_GameController *h0 = g_players[0].handle) {
         prev_a = SDL_GameControllerGetButton(h0, SDL_CONTROLLER_BUTTON_A);
         prev_b = SDL_GameControllerGetButton(h0, SDL_CONTROLLER_BUTTON_B);
-        prev_guide = SDL_GameControllerGetButton(h0, SDL_CONTROLLER_BUTTON_GUIDE);
     }
     while (g_psx_overlay_open && g_psx_overlay_ui) {
         SDL_Event ev;
@@ -8391,14 +8447,21 @@ static void psx_overlay_host_pause_loop(void) {
 #if defined(PSX_SDL3)
                 const SDL_Keycode key = ev.key.key;
                 const int repeat = ev.key.repeat ? 1 : 0;
+                const int scancode = (int)ev.key.scancode;
+                const int kmod = (int)ev.key.mod;
 #else
                 const SDL_Keycode key = ev.key.keysym.sym;
                 const int repeat = ev.key.repeat ? 1 : 0;
+                const int scancode = (int)ev.key.keysym.scancode;
+                const int kmod = (int)ev.key.keysym.mod;
 #endif
                 if (repeat && key == g_psx_overlay_open_key)
                     continue;
                 if (key == SDLK_ESCAPE) {
                     recomp_runtime_ui_handle_input(g_psx_overlay_ui, RECOMP_RUNTIME_UI_INPUT_BACK, 1, repeat);
+                } else if (!repeat &&
+                           host_keymap_match_event(HOST_KEYMAP_MENU, (int)key, scancode, kmod)) {
+                    recomp_runtime_ui_handle_input(g_psx_overlay_ui, RECOMP_RUNTIME_UI_INPUT_TOGGLE, 1, 0);
                 } else if (key == SDLK_UP) {
                     recomp_runtime_ui_handle_input(g_psx_overlay_ui, RECOMP_RUNTIME_UI_INPUT_UP, 1, repeat);
                 } else if (key == SDLK_DOWN) {
@@ -8442,9 +8505,8 @@ static void psx_overlay_host_pause_loop(void) {
                 btn_a = 1;
             if (SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_B))
                 btn_b = 1;
-            if (SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_GUIDE))
-                btn_guide = 1;
         }
+        btn_guide = psx_menu_pad_down();
 
         if (btn_guide && !prev_guide) {
             recomp_runtime_ui_handle_input(g_psx_overlay_ui, RECOMP_RUNTIME_UI_INPUT_TOGGLE, 1, 0);
@@ -8715,6 +8777,42 @@ static void fast_forward_toggle_poll_buttons(void) {
     if (down && !was_down)
         fast_forward_toggle_flip();
     was_down = down;
+}
+
+static void psx_toggle_fullscreen(void) {
+    const int target = s_window_fullscreen.mode ? 0 :
+                       (g_fullscreen ? g_fullscreen : 1);
+    if (psx_window_fullscreen_set(sdl_window, &s_window_fullscreen, target) == 0)
+        host_osd_push(target ? "Fullscreen" : "Windowed", 1500);
+    else
+        host_osd_push("Fullscreen change failed", 1500);
+}
+
+static void psx_toggle_scanlines(void) {
+    psx_video_set_scanlines(g_video_scanlines ? 0 : 1, g_video_scanline_strength);
+    char msg[48];
+    std::snprintf(msg, sizeof(msg), "Scanlines %s", g_video_scanlines ? "on" : "off");
+    host_osd_push(msg, 1200);
+}
+
+static void psx_volume_up(void) { host_volume_adjust(+5); }
+static void psx_volume_down(void) { host_volume_adjust(-5); }
+
+static void fullscreen_restart_poll_buttons(void) {
+    static const struct { int id; int* binding; void (*fn)(void); } kActions[] = {
+        { PSX_ASSIST_BIND_FULLSCREEN, &g_hotkey_pad_fullscreen, psx_toggle_fullscreen },
+        { PSX_ASSIST_BIND_RESTART, &g_hotkey_pad_restart, psx_restart_game },
+        { PSX_ASSIST_BIND_DISPLAY_PERF, &g_hotkey_pad_display_perf, fps_telemetry_toggle },
+        { PSX_ASSIST_BIND_VOLUME_UP, &g_hotkey_pad_volume_up, psx_volume_up },
+        { PSX_ASSIST_BIND_VOLUME_DOWN, &g_hotkey_pad_volume_down, psx_volume_down },
+        { PSX_ASSIST_BIND_SCANLINES, &g_hotkey_pad_scanlines, psx_toggle_scanlines },
+    };
+    static int was_down[PSX_ASSIST_BIND_COUNT];
+    for (const auto& a : kActions) {
+        const int down = hotkey_shortcut_down(a.id, *a.binding);
+        if (down && !was_down[a.id]) a.fn();
+        was_down[a.id] = down;
+    }
 }
 
 static void rewind_poll_nav(uint32_t now_ms) {
@@ -9025,7 +9123,9 @@ static bool drain_host_events() {
                 netplay_soft_exit("netplay_escape");
                 return false;
             }
-            if (!key_repeat && key == SDLK_ESCAPE && !psx_rewind_is_open() && !savestate_menu_open) {
+            if (!key_repeat && host_keymap_match_event(HOST_KEYMAP_MENU, (int)key,
+                                                       (int)scancode, (int)mod) &&
+                !psx_rewind_is_open() && !savestate_menu_open) {
                 psx_local_mouse_reset();
                 psx_overlay_toggle(key);
                 continue;
@@ -9081,23 +9181,18 @@ static bool drain_host_events() {
                      host_keymap_match_event(HOST_KEYMAP_SCANLINES,
                                              (int)key, (int)scancode,
                                              (int)mod)) {
-                psx_video_set_scanlines(g_video_scanlines ? 0 : 1,
-                                        g_video_scanline_strength);
-                char msg[48];
-                std::snprintf(msg, sizeof(msg), "Scanlines %s",
-                              g_video_scanlines ? "on" : "off");
-                host_osd_push(msg, 1200);
+                psx_toggle_scanlines();
             }
             /* Host volume: config.ini [KeyMap] VolumeUp/VolumeDown
              * (defaults: keypad +/-). 5% steps; shows right-side bar. */
             else if (host_keymap_match_event(HOST_KEYMAP_VOLUME_UP,
                                               (int)key, (int)scancode,
                                               (int)mod)) {
-                host_volume_adjust(+5);
+                psx_volume_up();
             } else if (host_keymap_match_event(HOST_KEYMAP_VOLUME_DOWN,
                                                 (int)key, (int)scancode,
                                                 (int)mod)) {
-                host_volume_adjust(-5);
+                psx_volume_down();
             }
             /* Fullscreen toggle: Alt+Enter or Cmd/Ctrl+F. Toggles between
              * windowed and the CONFIGURED tri-state mode (g_fullscreen: 1
@@ -9109,12 +9204,13 @@ static bool drain_host_events() {
                      host_keymap_match_event(HOST_KEYMAP_FULLSCREEN,
                                              (int)key, (int)scancode,
                                              (int)mod)) {
-                const int target = s_window_fullscreen.mode ? 0 :
-                                   (g_fullscreen ? g_fullscreen : 1);
-                if (psx_window_fullscreen_set(sdl_window, &s_window_fullscreen, target) == 0)
-                    host_osd_push(target ? "Fullscreen" : "Windowed", 1500);
-                else
-                    host_osd_push("Fullscreen change failed", 1500);
+                psx_toggle_fullscreen();
+            }
+            else if (!key_repeat &&
+                     host_keymap_match_event(HOST_KEYMAP_RESTART,
+                                             (int)key, (int)scancode,
+                                             (int)mod)) {
+                psx_restart_game();
             }
         }
     }
@@ -9308,6 +9404,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         savestate_menu_poll_toggle_buttons();
         rewind_poll_toggle_buttons();
         fast_forward_toggle_poll_buttons();
+        fullscreen_restart_poll_buttons();
         psx_rewind_note_frame();
         psx_rewind_present_tick((uint32_t)SDL_GetTicks());
         if (g_psx_overlay_open)
@@ -16435,6 +16532,13 @@ namespace {
         "Save states",
         "Fast-forward",
         "Fast-forward toggle",
+        "Fullscreen",
+        "Restart",
+        "FPS readout",
+        "Volume up",
+        "Volume down",
+        "Scanlines toggle",
+        "In-game menu",
     };
 
 #if defined(RECOMP_LAUNCHER_HAS_INTERNAL_RESOLUTION)
@@ -16521,9 +16625,9 @@ namespace {
         gi->assist_binding_labels = kPsxHostShortcutLabels;
         gi->assist_binding_count = PSX_ASSIST_BIND_COUNT;
 #if defined(RECOMP_LAUNCHER_HAS_DIRECT_ASSIST_BIND)
-        /* Title-declared direct shortcut: captured as one button, defaulted
-         * to the title's button; the other shortcuts keep their defaults. */
-        if (g_title_direct_shortcut >= 0) {
+        /* Defaults for Reset; a title-declared direct shortcut is captured as
+         * one button and defaulted to the title's button. */
+        {
             /* recomp-ui copies RECOMP_LAUNCHER_MAX_ASSIST_BINDINGS entries. */
             static int pad_defaults[RECOMP_LAUNCHER_MAX_ASSIST_BINDINGS];
             static const int key_defaults[RECOMP_LAUNCHER_MAX_ASSIST_BINDINGS] = {};
@@ -16531,11 +16635,20 @@ namespace {
             pad_defaults[PSX_ASSIST_BIND_SAVE_STATE_MENU] = PSX_HOTKEY_PAD_SELECT_R1;
             pad_defaults[PSX_ASSIST_BIND_FAST_FORWARD] = PSX_HOTKEY_PAD_SELECT_L1;
             pad_defaults[PSX_ASSIST_BIND_FAST_FORWARD_TOGGLE] = 0;
-            pad_defaults[g_title_direct_shortcut] = PSX_HOTKEY_PAD_BUTTON_COMBO(
-                (uint32_t)1u << g_title_direct_button);
+            pad_defaults[PSX_ASSIST_BIND_FULLSCREEN] = 0;
+            pad_defaults[PSX_ASSIST_BIND_RESTART] = 0;
+            pad_defaults[PSX_ASSIST_BIND_DISPLAY_PERF] = 0;
+            pad_defaults[PSX_ASSIST_BIND_VOLUME_UP] = 0;
+            pad_defaults[PSX_ASSIST_BIND_VOLUME_DOWN] = 0;
+            pad_defaults[PSX_ASSIST_BIND_SCANLINES] = 0;
+            pad_defaults[PSX_ASSIST_BIND_MENU] = PSX_HOTKEY_PAD_MENU_DEFAULT;
+            if (g_title_direct_shortcut >= 0) {
+                pad_defaults[g_title_direct_shortcut] = PSX_HOTKEY_PAD_BUTTON_COMBO(
+                    (uint32_t)1u << g_title_direct_button);
+                gi->assist_direct_pad_bind_action = g_title_direct_shortcut + 1;
+            }
             gi->assist_default_pad_bind = pad_defaults;
             gi->assist_default_key_bind = key_defaults;
-            gi->assist_direct_pad_bind_action = g_title_direct_shortcut + 1;
         }
 #endif
         gi->has_skip_fmv = 1;
@@ -17750,6 +17863,21 @@ int main(int argc, char** argv) {
             g_hotkey_pad_fast_forward = normalize_hotkey_pad_binding(
                 us.hotkey_pad_fast_forward,
                 PSX_HOTKEY_PAD_SELECT_L1);
+        if (us.has_hotkey_pad_fullscreen)
+            g_hotkey_pad_fullscreen = normalize_hotkey_pad_binding(us.hotkey_pad_fullscreen, 0);
+        if (us.has_hotkey_pad_restart)
+            g_hotkey_pad_restart = normalize_hotkey_pad_binding(us.hotkey_pad_restart, 0);
+        if (us.has_hotkey_pad_display_perf)
+            g_hotkey_pad_display_perf = normalize_hotkey_pad_binding(us.hotkey_pad_display_perf, 0);
+        if (us.has_hotkey_pad_volume_up)
+            g_hotkey_pad_volume_up = normalize_hotkey_pad_binding(us.hotkey_pad_volume_up, 0);
+        if (us.has_hotkey_pad_volume_down)
+            g_hotkey_pad_volume_down = normalize_hotkey_pad_binding(us.hotkey_pad_volume_down, 0);
+        if (us.has_hotkey_pad_scanlines)
+            g_hotkey_pad_scanlines = normalize_hotkey_pad_binding(us.hotkey_pad_scanlines, 0);
+        if (us.has_hotkey_pad_menu)
+            g_hotkey_pad_menu = normalize_hotkey_pad_binding(
+                us.hotkey_pad_menu, PSX_HOTKEY_PAD_MENU_DEFAULT);
         if (us.has_hotkey_pad_fast_forward_toggle)
             g_hotkey_pad_fast_forward_toggle = normalize_hotkey_pad_binding(
                 us.hotkey_pad_fast_forward_toggle, 0);
@@ -18310,6 +18438,20 @@ int main(int argc, char** argv) {
             seed.has_hotkey_pad_fast_forward = true;
             seed.hotkey_pad_fast_forward_toggle = g_hotkey_pad_fast_forward_toggle;
             seed.has_hotkey_pad_fast_forward_toggle = true;
+            seed.hotkey_pad_fullscreen = g_hotkey_pad_fullscreen;
+            seed.has_hotkey_pad_fullscreen = true;
+            seed.hotkey_pad_restart = g_hotkey_pad_restart;
+            seed.has_hotkey_pad_restart = true;
+            seed.hotkey_pad_display_perf = g_hotkey_pad_display_perf;
+            seed.has_hotkey_pad_display_perf = true;
+            seed.hotkey_pad_volume_up = g_hotkey_pad_volume_up;
+            seed.has_hotkey_pad_volume_up = true;
+            seed.hotkey_pad_volume_down = g_hotkey_pad_volume_down;
+            seed.has_hotkey_pad_volume_down = true;
+            seed.hotkey_pad_scanlines = g_hotkey_pad_scanlines;
+            seed.has_hotkey_pad_scanlines = true;
+            seed.hotkey_pad_menu = g_hotkey_pad_menu;
+            seed.has_hotkey_pad_menu = true;
             seed.skip_launcher = skip_launcher_setting;   seed.has_skip_launcher = true;
             if (has_netplay_player_name) {
                 seed.netplay_player_name = netplay_player_name;
@@ -18526,6 +18668,21 @@ int main(int argc, char** argv) {
                     PSX_HOTKEY_PAD_SELECT_L1);
             ls.assist_pad_bind[PSX_ASSIST_BIND_FAST_FORWARD_TOGGLE] =
                 normalize_hotkey_pad_binding(seed.hotkey_pad_fast_forward_toggle, 0);
+            ls.assist_pad_bind[PSX_ASSIST_BIND_FULLSCREEN] =
+                normalize_hotkey_pad_binding(seed.hotkey_pad_fullscreen, 0);
+            ls.assist_pad_bind[PSX_ASSIST_BIND_RESTART] =
+                normalize_hotkey_pad_binding(seed.hotkey_pad_restart, 0);
+            ls.assist_pad_bind[PSX_ASSIST_BIND_DISPLAY_PERF] =
+                normalize_hotkey_pad_binding(seed.hotkey_pad_display_perf, 0);
+            ls.assist_pad_bind[PSX_ASSIST_BIND_VOLUME_UP] =
+                normalize_hotkey_pad_binding(seed.hotkey_pad_volume_up, 0);
+            ls.assist_pad_bind[PSX_ASSIST_BIND_VOLUME_DOWN] =
+                normalize_hotkey_pad_binding(seed.hotkey_pad_volume_down, 0);
+            ls.assist_pad_bind[PSX_ASSIST_BIND_SCANLINES] =
+                normalize_hotkey_pad_binding(seed.hotkey_pad_scanlines, 0);
+            ls.assist_pad_bind[PSX_ASSIST_BIND_MENU] =
+                normalize_hotkey_pad_binding(seed.hotkey_pad_menu,
+                    PSX_HOTKEY_PAD_MENU_DEFAULT);
             ls.auto_skip_fmv      = seed.auto_skip_fmv ? 1 : 0;
             ls.turbo_loads        = seed.turbo_loads ? 1 : 0;
             /* Localization: index of resolved_language within lang_menu_options
@@ -18910,6 +19067,28 @@ int main(int argc, char** argv) {
                 seed.hotkey_pad_fast_forward_toggle = normalize_hotkey_pad_binding(
                     ls.assist_pad_bind[PSX_ASSIST_BIND_FAST_FORWARD_TOGGLE], 0);
                 seed.has_hotkey_pad_fast_forward_toggle = true;
+                seed.hotkey_pad_fullscreen = normalize_hotkey_pad_binding(
+                    ls.assist_pad_bind[PSX_ASSIST_BIND_FULLSCREEN], 0);
+                seed.has_hotkey_pad_fullscreen = true;
+                seed.hotkey_pad_restart = normalize_hotkey_pad_binding(
+                    ls.assist_pad_bind[PSX_ASSIST_BIND_RESTART], 0);
+                seed.has_hotkey_pad_restart = true;
+                seed.hotkey_pad_display_perf = normalize_hotkey_pad_binding(
+                    ls.assist_pad_bind[PSX_ASSIST_BIND_DISPLAY_PERF], 0);
+                seed.has_hotkey_pad_display_perf = true;
+                seed.hotkey_pad_volume_up = normalize_hotkey_pad_binding(
+                    ls.assist_pad_bind[PSX_ASSIST_BIND_VOLUME_UP], 0);
+                seed.has_hotkey_pad_volume_up = true;
+                seed.hotkey_pad_volume_down = normalize_hotkey_pad_binding(
+                    ls.assist_pad_bind[PSX_ASSIST_BIND_VOLUME_DOWN], 0);
+                seed.has_hotkey_pad_volume_down = true;
+                seed.hotkey_pad_scanlines = normalize_hotkey_pad_binding(
+                    ls.assist_pad_bind[PSX_ASSIST_BIND_SCANLINES], 0);
+                seed.has_hotkey_pad_scanlines = true;
+                seed.hotkey_pad_menu = normalize_hotkey_pad_binding(
+                    ls.assist_pad_bind[PSX_ASSIST_BIND_MENU],
+                    PSX_HOTKEY_PAD_MENU_DEFAULT);
+                seed.has_hotkey_pad_menu = true;
                 seed.auto_skip_fmv = ls.auto_skip_fmv != 0;
                 seed.has_auto_skip_fmv = true;
                 seed.turbo_loads = ls.turbo_loads != 0;
@@ -19191,6 +19370,20 @@ int main(int argc, char** argv) {
                 g_hotkey_pad_fast_forward_toggle = seed.has_hotkey_pad_fast_forward_toggle
                     ? seed.hotkey_pad_fast_forward_toggle
                     : 0;
+                g_hotkey_pad_fullscreen = seed.has_hotkey_pad_fullscreen
+                    ? seed.hotkey_pad_fullscreen : 0;
+                g_hotkey_pad_restart = seed.has_hotkey_pad_restart
+                    ? seed.hotkey_pad_restart : 0;
+                g_hotkey_pad_display_perf = seed.has_hotkey_pad_display_perf
+                    ? seed.hotkey_pad_display_perf : 0;
+                g_hotkey_pad_volume_up = seed.has_hotkey_pad_volume_up
+                    ? seed.hotkey_pad_volume_up : 0;
+                g_hotkey_pad_volume_down = seed.has_hotkey_pad_volume_down
+                    ? seed.hotkey_pad_volume_down : 0;
+                g_hotkey_pad_scanlines = seed.has_hotkey_pad_scanlines
+                    ? seed.hotkey_pad_scanlines : 0;
+                g_hotkey_pad_menu = seed.has_hotkey_pad_menu
+                    ? seed.hotkey_pad_menu : PSX_HOTKEY_PAD_MENU_DEFAULT;
                 skip_launcher_setting = seed.skip_launcher;
                 if (seed.has_bios_path) {
                     settings_bios_storage = seed.bios_path.string();
@@ -21051,6 +21244,21 @@ soft_return_lobby:
                 PSX_HOTKEY_PAD_SELECT_L1);
         ls.assist_pad_bind[PSX_ASSIST_BIND_FAST_FORWARD_TOGGLE] =
             normalize_hotkey_pad_binding(g_hotkey_pad_fast_forward_toggle, 0);
+        ls.assist_pad_bind[PSX_ASSIST_BIND_FULLSCREEN] =
+            normalize_hotkey_pad_binding(g_hotkey_pad_fullscreen, 0);
+        ls.assist_pad_bind[PSX_ASSIST_BIND_RESTART] =
+            normalize_hotkey_pad_binding(g_hotkey_pad_restart, 0);
+        ls.assist_pad_bind[PSX_ASSIST_BIND_DISPLAY_PERF] =
+            normalize_hotkey_pad_binding(g_hotkey_pad_display_perf, 0);
+        ls.assist_pad_bind[PSX_ASSIST_BIND_VOLUME_UP] =
+            normalize_hotkey_pad_binding(g_hotkey_pad_volume_up, 0);
+        ls.assist_pad_bind[PSX_ASSIST_BIND_VOLUME_DOWN] =
+            normalize_hotkey_pad_binding(g_hotkey_pad_volume_down, 0);
+        ls.assist_pad_bind[PSX_ASSIST_BIND_SCANLINES] =
+            normalize_hotkey_pad_binding(g_hotkey_pad_scanlines, 0);
+        ls.assist_pad_bind[PSX_ASSIST_BIND_MENU] =
+            normalize_hotkey_pad_binding(g_hotkey_pad_menu,
+                PSX_HOTKEY_PAD_MENU_DEFAULT);
         ls.aspect_index = (g_video_aspect_num * 9 == g_video_aspect_den * 21) ? 2
             : (g_video_aspect_num == 16 && g_video_aspect_den == 9) ? 1 : 0;
         ls.language_index = 0;
@@ -21486,6 +21694,28 @@ soft_return_lobby:
                 us.hotkey_pad_fast_forward_toggle = normalize_hotkey_pad_binding(
                     ls.assist_pad_bind[PSX_ASSIST_BIND_FAST_FORWARD_TOGGLE], 0);
                 us.has_hotkey_pad_fast_forward_toggle = true;
+                us.hotkey_pad_fullscreen = normalize_hotkey_pad_binding(
+                    ls.assist_pad_bind[PSX_ASSIST_BIND_FULLSCREEN], 0);
+                us.has_hotkey_pad_fullscreen = true;
+                us.hotkey_pad_restart = normalize_hotkey_pad_binding(
+                    ls.assist_pad_bind[PSX_ASSIST_BIND_RESTART], 0);
+                us.has_hotkey_pad_restart = true;
+                us.hotkey_pad_display_perf = normalize_hotkey_pad_binding(
+                    ls.assist_pad_bind[PSX_ASSIST_BIND_DISPLAY_PERF], 0);
+                us.has_hotkey_pad_display_perf = true;
+                us.hotkey_pad_volume_up = normalize_hotkey_pad_binding(
+                    ls.assist_pad_bind[PSX_ASSIST_BIND_VOLUME_UP], 0);
+                us.has_hotkey_pad_volume_up = true;
+                us.hotkey_pad_volume_down = normalize_hotkey_pad_binding(
+                    ls.assist_pad_bind[PSX_ASSIST_BIND_VOLUME_DOWN], 0);
+                us.has_hotkey_pad_volume_down = true;
+                us.hotkey_pad_scanlines = normalize_hotkey_pad_binding(
+                    ls.assist_pad_bind[PSX_ASSIST_BIND_SCANLINES], 0);
+                us.has_hotkey_pad_scanlines = true;
+                us.hotkey_pad_menu = normalize_hotkey_pad_binding(
+                    ls.assist_pad_bind[PSX_ASSIST_BIND_MENU],
+                    PSX_HOTKEY_PAD_MENU_DEFAULT);
+                us.has_hotkey_pad_menu = true;
                 us.auto_skip_fmv = ls.auto_skip_fmv != 0;
                 us.has_auto_skip_fmv = true;
                 us.turbo_loads = ls.turbo_loads != 0;
@@ -21578,6 +21808,21 @@ soft_return_lobby:
                 PSX_HOTKEY_PAD_SELECT_L1);
             g_hotkey_pad_fast_forward_toggle = normalize_hotkey_pad_binding(
                 ls.assist_pad_bind[PSX_ASSIST_BIND_FAST_FORWARD_TOGGLE], 0);
+            g_hotkey_pad_fullscreen = normalize_hotkey_pad_binding(
+                ls.assist_pad_bind[PSX_ASSIST_BIND_FULLSCREEN], 0);
+            g_hotkey_pad_restart = normalize_hotkey_pad_binding(
+                ls.assist_pad_bind[PSX_ASSIST_BIND_RESTART], 0);
+            g_hotkey_pad_display_perf = normalize_hotkey_pad_binding(
+                ls.assist_pad_bind[PSX_ASSIST_BIND_DISPLAY_PERF], 0);
+            g_hotkey_pad_volume_up = normalize_hotkey_pad_binding(
+                ls.assist_pad_bind[PSX_ASSIST_BIND_VOLUME_UP], 0);
+            g_hotkey_pad_volume_down = normalize_hotkey_pad_binding(
+                ls.assist_pad_bind[PSX_ASSIST_BIND_VOLUME_DOWN], 0);
+            g_hotkey_pad_scanlines = normalize_hotkey_pad_binding(
+                ls.assist_pad_bind[PSX_ASSIST_BIND_SCANLINES], 0);
+            g_hotkey_pad_menu = normalize_hotkey_pad_binding(
+                ls.assist_pad_bind[PSX_ASSIST_BIND_MENU],
+                PSX_HOTKEY_PAD_MENU_DEFAULT);
             switch (ls.aspect_index) {
                 case 2:  g_video_aspect_num = 21; g_video_aspect_den = 9; break;
                 case 1:  g_video_aspect_num = 16; g_video_aspect_den = 9; break;

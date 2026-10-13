@@ -63,7 +63,7 @@ static const int kPsxGamepadBindOrder[LNG_PSX_PAD_BUTTON_COUNT] = {
 // unchanged — its SRAM row stays folded into the GAME card exactly as today.
 static const char* const kPanelsDashboardPsx[] = { "game", "controller", "save", NULL };
 static const char* const kPanelsSettingsPsx[]   =
-    { "video", "audio", "input", "system", "hotkeys", NULL };
+    { "video", "audio", "input", "system", NULL };
 
 // ---- ROM (disc) file-picker filter ----------------------------------------------
 // Cue sheets (Redump-style) preferred — track .bin files sit beside the .cue.
@@ -121,7 +121,10 @@ static const SystemProfile kSystemProfilePsx = {
                                    (1u << LNG_HK_DISPLAY_PERF)   |
                                    RUI_PSX_REWIND_HOTKEY_MASK    |
                                    (1u << LNG_HK_SAVE_STATE_MENU) |
-                                   (1u << LNG_HK_TURBO_TOGGLE)),
+                                   (1u << LNG_HK_TURBO_TOGGLE) |
+                                   (1u << LNG_HK_SCANLINES) |
+                                   (1u << LNG_HK_MENU) |
+                                   (1u << LNG_HK_RESET)),
     /* panels_dashboard  */ kPanelsDashboardPsx,
     /* panels_settings   */ kPanelsSettingsPsx,
     /* panels_controller */ kPanelsControllerCommon,

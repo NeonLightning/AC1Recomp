@@ -52,7 +52,8 @@ static const char* kHotkeyNames[] = {
     "Window bigger", "Window smaller", "Volume up", "Volume down",
     "FPS readout", "Toggle renderer",
     "Solar level up", "Solar level down", "Resume live solar",
-    "Rewind", "Save states menu", "Open launcher", "Fast-forward toggle"
+    "Rewind", "Save states menu", "Open launcher", "Fast-forward toggle",
+    "Scanlines toggle", "In-game menu"
 };
 typedef char kHotkeyNames_covers_every_hotkey[
     (sizeof(kHotkeyNames) / sizeof(kHotkeyNames[0]) == LNG_HK_COUNT) ? 1 : -1];
@@ -643,10 +644,17 @@ void launcher_model_init(LauncherModel* m,
                sizeof m->default_assist_key_bind);
         memcpy(m->default_assist_pad_bind, game->assist_default_pad_bind,
                sizeof m->default_assist_pad_bind);
+        /* Refill only a never-configured set, so an individually unbound
+         * shortcut stays unbound. */
+        bool any_key = false, any_pad = false;
         for (int i = 0; i < m->assist_binding_count; ++i) {
-            if (m->s.assist_key_bind[i] == 0)
+            any_key = any_key || m->s.assist_key_bind[i] != 0;
+            any_pad = any_pad || m->s.assist_pad_bind[i] != 0;
+        }
+        for (int i = 0; i < m->assist_binding_count; ++i) {
+            if (m->s.assist_key_bind[i] == 0 && !any_key)
                 m->s.assist_key_bind[i] = m->default_assist_key_bind[i];
-            if (m->s.assist_pad_bind[i] == 0)
+            if (m->s.assist_pad_bind[i] == 0 && !any_pad)
                 m->s.assist_pad_bind[i] = m->default_assist_pad_bind[i];
         }
     } else {
