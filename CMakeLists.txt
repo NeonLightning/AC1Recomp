@@ -11,6 +11,31 @@ endif()
 
 project(AC1 LANGUAGES C CXX)
 
+# Keep fetched dependency sources and their CMake build trees outside the
+# disposable per-build directory. FETCHCONTENT_BASE_DIR can still be overridden.
+if(NOT DEFINED FETCHCONTENT_BASE_DIR OR FETCHCONTENT_BASE_DIR STREQUAL "" OR
+    FETCHCONTENT_BASE_DIR STREQUAL "${CMAKE_BINARY_DIR}/_deps")
+    set(_ac1_fetchcontent_key
+        "${CMAKE_SYSTEM_NAME}-${CMAKE_C_COMPILER_ID}-${CMAKE_C_COMPILER_VERSION}-${CMAKE_GENERATOR}")
+    string(MD5 _ac1_build_tree_id "${CMAKE_BINARY_DIR}")
+    string(APPEND _ac1_fetchcontent_key "-${_ac1_build_tree_id}")
+    if(CMAKE_BUILD_TYPE)
+        string(APPEND _ac1_fetchcontent_key "-${CMAKE_BUILD_TYPE}")
+    endif()
+    if(DEFINED ENV{XDG_CACHE_HOME} AND NOT "$ENV{XDG_CACHE_HOME}" STREQUAL "")
+        set(_ac1_fetchcontent_root "$ENV{XDG_CACHE_HOME}")
+    elseif(DEFINED ENV{HOME} AND NOT "$ENV{HOME}" STREQUAL "")
+        set(_ac1_fetchcontent_root "$ENV{HOME}/.cache")
+    elseif(DEFINED ENV{USERPROFILE} AND NOT "$ENV{USERPROFILE}" STREQUAL "")
+        set(_ac1_fetchcontent_root "$ENV{USERPROFILE}/AppData/Local")
+    else()
+        set(_ac1_fetchcontent_root "${CMAKE_BINARY_DIR}")
+    endif()
+    set(FETCHCONTENT_BASE_DIR
+        "${_ac1_fetchcontent_root}/ac1recomp/fetchcontent/${_ac1_fetchcontent_key}"
+        CACHE PATH "FetchContent cache for AC1 dependencies" FORCE)
+endif()
+
 # --- Opt-in product surfaces (OFF by default in the framework) -------------
 # Scaffold prompts / flags fill these. Without recomp-ui, PSX_RECOMP_UI is OFF.
 # The wizard (WIZARD_CMAKE_BLOCK / ENABLE_SETUP_WIZARD) is the first-run disc

@@ -411,6 +411,9 @@ void launcher_model_init(LauncherModel* m,
         m->has_skip_fmv         = game->has_skip_fmv != 0;
         m->has_turbo_loads      = game->has_turbo_loads != 0;
         m->has_geometry_precision = game->has_geometry_precision != 0;
+        m->has_fast_boot        = game->has_fast_boot != 0;
+        m->has_bios_hle         = game->has_bios_hle != 0;
+        m->has_state_slot       = game->has_state_slot != 0;
         // game->has_fullscreen_toggle is deliberately NOT read: the Fullscreen
         // row is universal (drawn for every console) — see recomp_launcher.h.
         m->has_bios             = game->has_bios != 0;
@@ -598,6 +601,8 @@ void launcher_model_init(LauncherModel* m,
     }
 
     if (io) m->s = *io;
+    if (m->has_state_slot && (m->s.state_slot < 1 || m->s.state_slot > 12))
+        m->s.state_slot = 1;
     if (m->s.netplay_view_index < 0 || m->s.netplay_view_index >= m->num_netplay_view_labels)
         m->s.netplay_view_index = 0;
     /* Seed the selected disc from the host's persisted setting BEFORE the ROM
@@ -1741,6 +1746,13 @@ void launcher_model_cycle_freq(LauncherModel* m) {
 
 void launcher_model_volume_delta(LauncherModel* m, int delta) {
     m->s.volume = clampi(m->s.volume + delta, 0, 100);
+    m->s.enable_audio = m->s.volume > 0;
+}
+
+void launcher_model_toggle_audio(LauncherModel* m) {
+    if (!m) return;
+    m->s.enable_audio = !m->s.enable_audio;
+    if (m->s.enable_audio && m->s.volume == 0) m->s.volume = 80;
 }
 
 // ---- deeper PSX-style settings ---------------------------------------------
@@ -2218,6 +2230,19 @@ const char* launcher_model_interp_fps_label(const LauncherModel* m) {
 
 void launcher_model_toggle_spu_hq(LauncherModel* m) {
     m->s.spu_hq = !m->s.spu_hq;
+}
+
+void launcher_model_toggle_fast_boot(LauncherModel* m) {
+    if (m && m->has_fast_boot) m->s.fast_boot = !m->s.fast_boot;
+}
+
+void launcher_model_toggle_bios_hle(LauncherModel* m) {
+    if (m && m->has_bios_hle) m->s.bios_hle = !m->s.bios_hle;
+}
+
+void launcher_model_set_state_slot(LauncherModel* m, int slot) {
+    if (m && m->has_state_slot)
+        m->s.state_slot = clampi(slot, 1, 12);
 }
 
 void launcher_model_toggle_rewind_enabled(LauncherModel* m) {

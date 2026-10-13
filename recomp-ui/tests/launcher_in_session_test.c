@@ -40,6 +40,42 @@ int main(void) {
     check(model.has_open_launcher_hotkey,
           "has_open_launcher_hotkey carries into the model");
 
+        game.has_fast_boot = 1;
+        game.has_bios_hle = 1;
+        game.has_frame_interp = 1;
+        game.has_skip_fmv = 1;
+            game.has_state_slot = 1;
+        launcher_model_init(&model, &settings, &game, NULL);
+        check(model.has_fast_boot && model.has_bios_hle && model.has_frame_interp &&
+                model.has_skip_fmv && model.has_state_slot,
+                "PSX settings capabilities carry into the model");
+            launcher_model_set_state_slot(&model, 8);
+            check(model.s.state_slot == 8, "state slot is selectable");
+            launcher_model_set_state_slot(&model, 13);
+            check(model.s.state_slot == 12, "state slot clamps to runtime range");
+        launcher_model_toggle_fast_boot(&model);
+        launcher_model_toggle_bios_hle(&model);
+        check(model.s.fast_boot && model.s.bios_hle,
+            "PSX boot controls update launcher settings");
+
+        settings.volume = 55;
+        settings.enable_audio = 1;
+        launcher_model_init(&model, &settings, &game, NULL);
+        launcher_model_toggle_audio(&model);
+        check(!model.s.enable_audio && model.s.volume == 55,
+            "muting retains the chosen volume");
+        launcher_model_toggle_audio(&model);
+        check(model.s.enable_audio && model.s.volume == 55,
+            "unmuting restores the retained volume");
+
+        game.has_fast_boot = 0;
+        game.has_bios_hle = 0;
+        launcher_model_init(&model, &settings, &game, NULL);
+        launcher_model_toggle_fast_boot(&model);
+        launcher_model_toggle_bios_hle(&model);
+        check(!model.s.fast_boot && !model.s.bios_hle,
+            "unoffered boot controls cannot change settings");
+
     for (int h = 0; h < LNG_HK_COUNT; ++h) {
         const char *name = launcher_hotkey_name((LngHotkey)h);
         check(name && name[0] && strcmp(name, "?") != 0,

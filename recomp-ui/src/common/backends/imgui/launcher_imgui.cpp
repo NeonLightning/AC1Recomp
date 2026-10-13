@@ -4315,18 +4315,15 @@ void draw_display_controls(LauncherModel* m, const LauncherTheme& th) {
     draw_shader_row(m, th);
 
     if (m->has_geometry_precision) {
-        // Geometry correction deliberately draws NO row. It moves vertices, and
-        // the runtime can only recover the sub-pixel original for ~5% of them
-        // (93% of lookups are ambiguous), so a corrected triangle meets an
-        // uncorrected neighbour and their shared edge splits open. Measured on
-        // Ape Escape; see psxrecomp ENHANCEMENTS.md G1.8/G1.9. The setting stays
-        // in the ABI and remains readable from game.toml/settings.toml so the
-        // work is still testable, exactly as has_turbo_loads/Settings.turbo_loads
-        // stayed after their row was dropped — it simply has no control.
-        //
-        // Perspective textures are unaffected by that problem: they only change
-        // UV interpolation inside a polygon whose provenance is already proven,
-        // so no vertex moves and adjacent polygons cannot disagree about an edge.
+        row_label_right("Geometry precision", th, cb);
+        bool geometry = m->s.geometry_correction != 0;
+        if (ImGui::Checkbox("##geometry_precision", &geometry))
+            launcher_model_toggle_geometry_correction(m);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Experimental sub-pixel geometry correction. It can "
+                              "reduce polygon jitter, but may cause cracks in "
+                              "meshes; turn it off if artifacts appear.");
+
         row_label_right("Perspective textures", th, cb);
         bool persp = m->s.perspective_texturing != 0;
         if (ImGui::Checkbox("##persptex", &persp))
@@ -4534,6 +4531,10 @@ void draw_audio_controls(LauncherModel* m, const LauncherTheme& th) {
                           ImVec2(px(SETTINGS_CTRL_W), px(30))))
             launcher_model_cycle_freq(m);
     }
+    row_label_right("Audio", th, ImGui::GetFrameHeight());
+    bool audio_enabled = m->s.enable_audio != 0;
+    if (ImGui::Checkbox("##audio_enabled", &audio_enabled))
+        launcher_model_toggle_audio(m);
     row_label_right("Volume", th, px(SETTINGS_CTRL_W));
     int dv = 0; stepper("vol", m->s.volume, "%", &dv, px(SETTINGS_CTRL_W));
     if (dv) launcher_model_volume_delta(m, dv);
@@ -4738,6 +4739,26 @@ static void draw_named_system_file(LauncherModel* m, const LauncherTheme& th) {
 
 void draw_system_controls(LauncherModel* m, const LauncherTheme& th) {
     eyebrow("SYSTEM");
+    if (m->has_state_slot) {
+        row_label_right("State slot", th, px(SETTINGS_CTRL_W));
+        int slot = m->s.state_slot < 1 ? 1 : m->s.state_slot;
+        ImGui::SetNextItemWidth(px(SETTINGS_CTRL_W));
+        if (ImGui::SliderInt("##state_slot", &slot, 1, 12, "%d"))
+            launcher_model_set_state_slot(m, slot);
+    }
+    const float checkbox_width = ImGui::GetFrameHeight();
+    if (m->has_fast_boot) {
+        row_label_right("Fast boot", th, checkbox_width);
+        bool enabled = m->s.fast_boot != 0;
+        if (ImGui::Checkbox("##fast_boot", &enabled))
+            launcher_model_toggle_fast_boot(m);
+    }
+    if (m->has_bios_hle) {
+        row_label_right("HLE BIOS", th, checkbox_width);
+        bool enabled = m->s.bios_hle != 0;
+        if (ImGui::Checkbox("##bios_hle", &enabled))
+            launcher_model_toggle_bios_hle(m);
+    }
     if (m->bios_name) {
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(px(14), px(8)));
         draw_named_system_file(m, th);

@@ -1578,6 +1578,10 @@ struct RecompLauncherCSettings {
     int  dual_analog_buttons;
     /* Duplicate face buttons onto shoulder buttons in dual analog mode; 0 off, 1 on. */
     int  dual_analog_duplicate_face;
+    /* PSX system boot choices, capability-gated by the matching GameInfo flags. */
+    int  fast_boot;
+    int  bios_hle;
+    int  state_slot;          // PSX savestate slot, 1..12
 };
 #define RECOMP_LAUNCHER_HAS_ZAPPER_SETTINGS 1
 
@@ -2373,6 +2377,10 @@ typedef struct RecompLauncherCGameInfo {
     /* Per-title Digital-mode dual-stick button mapping toggle. Appended
      * additively for ABI stability. */
     int  has_dual_analog_buttons;
+    /* PSX boot controls in the System settings panel. Appended additively. */
+    int  has_fast_boot;
+    int  has_bios_hle;
+    int  has_state_slot;
 } RecompLauncherCGameInfo;
 #define RECOMP_LAUNCHER_HAS_NETPLAY_VIEW 1
 #define RECOMP_LAUNCHER_HAS_ROM_PATTERNS 1

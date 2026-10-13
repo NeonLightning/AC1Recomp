@@ -2,10 +2,10 @@
 #define PSXRECOMP_MOD_SESSION_BASELINE_H
 
 /*
- * First-call capture / later-call restore for the scalar host settings a
- * trusted plugin's psx_mod_* setters can change and no launcher control owns
- * (vsync, frame interpolation and its rate, automatic FMV skipping, and the
- * frame periods native VBlank pacing overrides). reset_mod_owned_presentation()
+ * First-call capture / later-call restore for scalar host settings that a
+ * trusted plugin's psx_mod_* setters can override (vsync, frame interpolation
+ * and its rate, automatic FMV skipping, and the frame periods native VBlank
+ * pacing overrides). reset_mod_owned_presentation()
  * in main.cpp runs this at every session start; it lives here so a unit test
  * (runtime/tests/test_mod_session_baseline.c) drives the same code.
  *

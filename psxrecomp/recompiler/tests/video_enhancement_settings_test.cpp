@@ -174,6 +174,11 @@ static void test_user_settings_round_trip() {
     PSXRecompV4::UserSettings out;
     out.geometry_correction = true;   out.has_geometry_correction = true;
     out.perspective_texturing = true; out.has_perspective_texturing = true;
+    out.audio_volume = 63;             out.has_audio_volume = true;
+    out.audio_enabled = false;         out.has_audio_enabled = true;
+    out.savestate_slot = 7;             out.has_savestate_slot = true;
+    out.fast_boot = true;               out.has_fast_boot = true;
+    out.bios_hle = true;                out.has_bios_hle = true;
     out.audio_freq = 48000;           out.has_audio_freq = true;
 
     fs::path p = fs::temp_directory_path() / "psxrecomp_pgxp_roundtrip.toml";
@@ -185,9 +190,24 @@ static void test_user_settings_round_trip() {
           "geometry_correction survives a save/load round trip");
     check(back.has_perspective_texturing && back.perspective_texturing,
           "perspective_texturing survives a save/load round trip");
+        check(back.has_audio_volume && back.audio_volume == 63,
+            "audio volume survives a save/load round trip");
+            check(back.has_audio_enabled && !back.audio_enabled,
+                "audio enabled state survives a save/load round trip");
+                check(back.has_savestate_slot && back.savestate_slot == 7,
+                    "savestate slot survives a save/load round trip");
+                    check(back.has_fast_boot && back.fast_boot,
+                        "fast_boot survives a save/load round trip");
+                    check(back.has_bios_hle && back.bios_hle,
+                        "bios_hle survives a save/load round trip");
     check(back.has_audio_freq && back.audio_freq == 48000,
           "audio frequency survives a save/load round trip");
     fs::remove(p);
+
+        p = write_temp("psxrecomp_audio_volume_range.toml", "[audio]\nvolume = 101\n");
+        back = PSXRecompV4::load_user_settings(p);
+        check(!back.has_audio_volume, "out-of-range audio volume is ignored");
+        fs::remove(p);
 }
 
 /* settings.toml [video] fov_scale: int and float TOML values read, absent stays

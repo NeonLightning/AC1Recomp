@@ -58,7 +58,8 @@ RecompRuntimeUi *recomp_runtime_ui_create_standard(
     if (!items) return NULL;
     const char **confirm_prompts = NULL;
     if (has(f, RECOMP_RUNTIME_UI_STANDARD_RETURN_TO_LAUNCHER) ||
-        has(f, RECOMP_RUNTIME_UI_STANDARD_QUIT)) {
+        has(f, RECOMP_RUNTIME_UI_STANDARD_QUIT) ||
+        has(f, RECOMP_RUNTIME_UI_STANDARD_RESTART)) {
         confirm_prompts = (const char **)calloc(total, sizeof(*confirm_prompts));
         if (!confirm_prompts) {
             free(items);
@@ -195,6 +196,12 @@ RecompRuntimeUi *recomp_runtime_ui_create_standard(
                  "Return to launcher", "Close the game, open the launcher. Press twice.",
                  RECOMP_RUNTIME_UI_ACTION, 0, 0, 0, NULL, 0, NULL);
         confirm_prompts[count - 1] = "Press again for the launcher";
+    }
+    if (has(f, RECOMP_RUNTIME_UI_STANDARD_RESTART)) {
+        add_item(items, &count, RECOMP_RUNTIME_UI_KEY_RESTART, "System",
+                 "Restart game", "Save settings and restart the game. Press twice.",
+                 RECOMP_RUNTIME_UI_ACTION, 0, 0, 0, NULL, 0, NULL);
+        confirm_prompts[count - 1] = "Press again to restart";
     }
     if (has(f, RECOMP_RUNTIME_UI_STANDARD_QUIT)) {
         add_item(items, &count, RECOMP_RUNTIME_UI_KEY_QUIT, "System", "Quit game",

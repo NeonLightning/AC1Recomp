@@ -10,6 +10,7 @@ typedef struct TestState {
     int level;
     int action_count;
     int launcher_count;
+    int restart_count;
     int quit_count;
     int save_count;
     int visible;
@@ -55,6 +56,7 @@ static int run_action(void *context, const RecompRuntimeUiItem *item) {
         ++state->action_count;
     else if (!strcmp(item->key, RECOMP_RUNTIME_UI_KEY_RETURN_TO_LAUNCHER))
         ++state->launcher_count;
+    else if (!strcmp(item->key, RECOMP_RUNTIME_UI_KEY_RESTART)) ++state->restart_count;
     else if (!strcmp(item->key, RECOMP_RUNTIME_UI_KEY_QUIT)) ++state->quit_count;
     else return 0;
     return 1;
@@ -193,6 +195,7 @@ int main(void) {
         exits.menu.callbacks = config.callbacks;
         exits.features = RECOMP_RUNTIME_UI_STANDARD_RESET |
                          RECOMP_RUNTIME_UI_STANDARD_RETURN_TO_LAUNCHER |
+                         RECOMP_RUNTIME_UI_STANDARD_RESTART |
                          RECOMP_RUNTIME_UI_STANDARD_QUIT;
         RecompRuntimeUi *e = recomp_runtime_ui_create_standard(&exits);
         assert(e != NULL);
@@ -209,11 +212,17 @@ int main(void) {
         assert(state.launcher_count == 1);
         recomp_runtime_ui_handle_input(e, RECOMP_RUNTIME_UI_INPUT_DOWN, 1, 0);
         recomp_runtime_ui_handle_input(e, RECOMP_RUNTIME_UI_INPUT_ACCEPT, 1, 0);
+         assert(state.restart_count == 0);
+         recomp_runtime_ui_handle_input(e, RECOMP_RUNTIME_UI_INPUT_ACCEPT, 1, 0);
+         assert(state.restart_count == 1);
+         recomp_runtime_ui_handle_input(e, RECOMP_RUNTIME_UI_INPUT_DOWN, 1, 0);
+         recomp_runtime_ui_handle_input(e, RECOMP_RUNTIME_UI_INPUT_ACCEPT, 1, 0);
         recomp_runtime_ui_handle_input(e, RECOMP_RUNTIME_UI_INPUT_UP, 1, 0);
         recomp_runtime_ui_handle_input(e, RECOMP_RUNTIME_UI_INPUT_ACCEPT, 1, 0);
         recomp_runtime_ui_handle_input(e, RECOMP_RUNTIME_UI_INPUT_DOWN, 1, 0);
         recomp_runtime_ui_handle_input(e, RECOMP_RUNTIME_UI_INPUT_ACCEPT, 1, 0);
-        assert(state.quit_count == 0 && state.launcher_count == 1);
+         assert(state.quit_count == 0 && state.launcher_count == 1 &&
+             state.restart_count == 1);
         recomp_runtime_ui_handle_input(e, RECOMP_RUNTIME_UI_INPUT_ACCEPT, 1, 0);
         assert(state.quit_count == 1 && state.launcher_count == 1);
         recomp_runtime_ui_destroy(e);

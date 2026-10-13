@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Guard PSX display enhancements as trusted-mod-only features."""
+"""Guard the fixed AC1 display settings and per-session mod overrides."""
 
 import re
 from pathlib import Path
@@ -11,27 +11,23 @@ HEADER = (ROOT / "runtime" / "include" / "mod_plugins.h").read_text(
     encoding="utf-8"
 )
 
-for declaration in (
-    "constexpr bool ws_offered = false;",
-    "constexpr bool ws_ultrawide_offered = false;",
-    "constexpr bool frame_interpolation_offered = false;",
-    "constexpr bool skip_fmv_offered = false;",
-):
-    assert declaration in MAIN, f"PSX launcher capability must default off: {declaration}"
+restart = MAIN[MAIN.index("static void psx_restart_game(void) {"):]
+restart = restart[:restart.index("\n}")]
+assert 'args.push_back("--no-launcher");' in restart
+assert 'g_saved_argv[i] != "--launcher"' in restart
 
-for legacy_route in (
-    "ws_offered = gc.ws_offered;",
-    "ws_ultrawide_offered = gc.ws_ultrawide_offered;",
-    "frame_interpolation_offered =\n                gc.runtime.video_offer_frame_interpolation;",
-    "skip_fmv_offered = gc.runtime.video_offer_skip_fmv;",
-):
-    assert legacy_route not in MAIN, f"legacy offer flag still controls UI: {legacy_route}"
+assert "gi->has_skip_fmv = 1;" in MAIN
+assert "gi->has_frame_interp = 1;" in MAIN
+assert "settings.has_auto_skip_fmv = true;" in MAIN
+assert "seed.has_frame_interpolation = true;" in MAIN
+assert "video_offer_frame_interpolation" not in MAIN
+assert "video_offer_skip_fmv" not in MAIN
 
-for hidden_capability in (
-    "gi->widescreen_supported = 0;",
-    "gi->aspect_mask = 0;",
+for title_gated_capability in (
+    "gi->widescreen_supported = ws_offered_b ? 1 : 0;",
+    "gi->aspect_mask = ws_offered_b ? (2 | (ws_ultrawide_offered_b ? 4 : 0)) : 0;",
 ):
-    assert hidden_capability in MAIN
+    assert title_gated_capability in MAIN
 
 for trusted_api in (
     "psx_mod_set_fixed_display_aspect",
@@ -41,7 +37,7 @@ for trusted_api in (
 ):
     assert trusted_api in HEADER, f"missing trusted mod API: {trusted_api}"
 
-assert MAIN.index("g_auto_skip_fmv = 0;") < MAIN.index("mod_runtime_activate_plugins();")
+assert "if (us.has_auto_skip_fmv)  g_auto_skip_fmv" in MAIN
 
 # Session hygiene: mod-owned presentation state must not outlive the session
 # that set it. The one in-process second session is the lobby rematch after a
@@ -100,7 +96,8 @@ COPIES = (
     ("frame_period_ms", "g_frame_period_ms"),
 )
 before = c_statements(helper[len(HELPER_SIG):call_at])
-expected = ["psx_local_mouse_clear();", "PSXModSessionScalars live;"] + [
+expected = ["psx_mod_internal_resolution_reset();", "psx_local_mouse_clear();",
+            "PSXModSessionScalars live;"] + [
     f"live.{f} = {g};" for f, g in COPIES
 ]
 assert sorted(before) == sorted(expected), \
@@ -179,7 +176,8 @@ order = [session.index(step) for step in (
     "g_mod_disc_speed_divisor = -1;",
     "g_mod_disc_instant_rate = -1;",
     "g_turbo_load_wall_multiplier = 0;",
-    "reset_mod_owned_presentation();\n        mod_runtime_activate_plugins();",
+    "reset_mod_owned_presentation();",
+    "mod_runtime_activate_plugins();",
     "apply_netplay_local_viewport_aspect(netplay);",
     "player_mode[i] = g_mod_controller_mode_override[i];",
     "g_turbo_load_wall_multiplier = g_mod_load_wall_multiplier;",
@@ -230,4 +228,4 @@ assert MAIN.rfind("case 1:  g_video_aspect_num = 16; g_video_aspect_den = 9; bre
                   0, rematch_start) > MAIN.index("soft_return_lobby:"), \
     "the launcher's aspect must be applied before the rematch re-clamp"
 
-print("mod-owned PSX display controls guard passed")
+print("PSX display controls guard passed")

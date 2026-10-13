@@ -33,6 +33,22 @@ cmake --build build-release --target psx-runtime -j$(nproc)
 
 The resulting executable will be at `build-release/AC1`.
 
+### Creating an End-User Release Package
+
+Build and package the game as a standalone ZIP with:
+
+```bash
+scripts/build_release.sh
+```
+
+The ZIP is written to `dist/` and contains the game executable and required
+runtime files, not CMake/Ninja metadata or compiler object files. To choose a
+build directory, artifact tag, or recompiler build directory:
+
+```bash
+scripts/build_release.sh build-release linux-x64 psxrecomp/recompiler/build
+```
+
 ---
 
 ## In-Game Settings Overlay
@@ -89,6 +105,7 @@ During gameplay, press the **Xbox (Guide) button** on a controller or the **Esca
 - **Fast boot**: Skip the PlayStation BIOS sequence and jump directly into the game.
 - **HLE BIOS**: Toggle high-level BIOS kernel service interception.
 - **Rewind feature**: Toggle memory rewind snapshot capture.
+- **Restart game**: Save active settings and restart with the current disc and launch options.
 - **Return to launcher**: Save active settings and reopen the graphical launcher.
 - **Quit game**: Close the application.
 
@@ -98,11 +115,12 @@ During gameplay, press the **Xbox (Guide) button** on a controller or the **Esca
 
 When starting the application without skipping the launcher, the GUI offers additional configuration tabs:
 
-- **Display Panel**: Select active graphics renderer (**OpenGL**, **Vulkan**, or **Software**), internal rendering resolution up to 8K, dynamic resolution fallback, and presentation pipeline settings.
+- **Display Panel**: Select the graphics renderer, aspect ratio, internal resolution, VSync, scanlines, frame interpolation, Skip FMVs, geometry precision, and other presentation settings.
 - **Controller Configuration**:
   - Rebind individual keyboard keys and controller buttons.
   - Set per-controller stick deadzone percentage.
   - Toggle **Dual analog mode** and **Duplicate face buttons on shoulders** with an on-screen reference legend.
-- **Audio & System**: Select host audio frequency, manage memory card files (Slot 1 and Slot 2), and switch disc images.
+- **Audio & System**: Mute or adjust audio, select host frequency, choose the savestate slot, manage memory cards, and switch disc images.
+- **System settings**: Choose **Fast boot** to skip the BIOS startup sequence and **HLE BIOS** to enable high-level BIOS services; these match the in-game controls and persist in `settings.toml`.
 
 Settings are saved automatically to [game.toml](game.toml) defaults and your user profile in `settings.toml`.

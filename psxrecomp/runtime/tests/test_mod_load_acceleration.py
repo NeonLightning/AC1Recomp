@@ -50,9 +50,9 @@ assert "settings.toml [video] turbo_loads = true is " in MAIN
 assert 'f << "turbo_loads       = "' not in CONFIG_CPP
 
 # The in-game Settings apply path reads a launcher snapshot taken BEFORE mod
-# activation, so it must not write either mod-owned global.
+# activation. Turbo loading remains mod-owned; Skip FMVs is a launcher setting.
 assert "if (turbo_loads_offered)  g_turbo_loads_enabled = ls.turbo_loads ? 1 : 0;" in MAIN
-assert "if (skip_fmv_offered)     g_auto_skip_fmv = ls.auto_skip_fmv ? 1 : 0;" in MAIN
+assert "g_auto_skip_fmv = ls.auto_skip_fmv ? 1 : 0;" in MAIN
 
 # These run inside main.cpp's start_mod_session(), which every session start
 # (first boot and lobby rematch) calls, hence the lambda-body indentation.

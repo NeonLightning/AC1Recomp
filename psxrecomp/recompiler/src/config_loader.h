@@ -1572,8 +1572,11 @@ struct UserSettings {
     bool has_hotkey_pad_fast_forward = false; int hotkey_pad_fast_forward = 1528; /* select+l1 */
     bool has_hotkey_pad_fast_forward_toggle = false; int hotkey_pad_fast_forward_toggle = 0; /* unbound */
     // [audio]
+    bool has_audio_enabled   = false; bool audio_enabled = true;
+    bool has_audio_volume    = false; int audio_volume = 100;
     bool has_spu_hq         = false; bool spu_hq         = false;
     bool has_audio_freq     = false; int  audio_freq     = 44100;
+    bool has_savestate_slot = false; int savestate_slot = 1;
     // [bios] / [disc] / [memcard]
     bool has_bios_path      = false; std::filesystem::path bios_path;
     bool has_disc_path      = false; std::filesystem::path disc_path;

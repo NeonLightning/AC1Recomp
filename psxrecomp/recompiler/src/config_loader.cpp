@@ -3014,6 +3014,17 @@ UserSettings load_user_settings(const fs::path& path) {
     }
     if (doc.contains("audio")) {
         const toml::value& a = toml::find(doc, "audio");
+        if (a.contains("enabled")) try_get([&]{
+            s.audio_enabled = toml::find<bool>(a, "enabled");
+            s.has_audio_enabled = true;
+        });
+        if (a.contains("volume")) try_get([&]{
+            const auto n = toml::find<int64_t>(a, "volume");
+            if (n >= 0 && n <= 100) {
+                s.audio_volume = (int)n;
+                s.has_audio_volume = true;
+            }
+        });
         if (a.contains("frequency")) try_get([&]{
             const auto n = toml::find<int64_t>(a, "frequency");
             if (valid_user_audio_freq((int)n)) {
@@ -3023,6 +3034,16 @@ UserSettings load_user_settings(const fs::path& path) {
         });
         if (a.contains("spu_hq")) try_get([&]{
             s.spu_hq = toml::find<bool>(a, "spu_hq"); s.has_spu_hq = true;
+        });
+    }
+    if (doc.contains("savestate")) {
+        const toml::value& state = toml::find(doc, "savestate");
+        if (state.contains("slot")) try_get([&]{
+            const auto n = toml::find<int64_t>(state, "slot");
+            if (n >= 1 && n <= 12) {
+                s.savestate_slot = (int)n;
+                s.has_savestate_slot = true;
+            }
         });
     }
     if (doc.contains("hotkeys")) {
@@ -3345,10 +3366,18 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
     if (s.has_rewind_interval)
         f << "rewind_interval   = " << s.rewind_interval << "\n";
     f << "\n[audio]\n";
+    if (s.has_audio_enabled)
+        f << "enabled = " << (s.audio_enabled ? "true" : "false") << "\n";
+    if (s.has_audio_volume)
+        f << "volume = " << s.audio_volume << "\n";
     if (s.has_audio_freq)
         f << "frequency = " << s.audio_freq << "\n";
     if (s.has_spu_hq)
         f << "spu_hq = " << (s.spu_hq ? "true" : "false") << "\n";
+    if (s.has_savestate_slot) {
+        f << "\n[savestate]\n";
+        f << "slot = " << s.savestate_slot << "\n";
+    }
     if (s.has_hotkey_pad_rewind || s.has_hotkey_pad_save_state_menu ||
         s.has_hotkey_pad_fast_forward || s.has_hotkey_pad_fast_forward_toggle) {
         f << "\n[hotkeys]\n";

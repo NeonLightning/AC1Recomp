@@ -467,6 +467,9 @@ typedef struct {
     // One flag gates both rows (two halves of one enhancement); the settings
     // stay independent. false => both rows hidden.
     bool     has_geometry_precision;
+    bool     has_fast_boot;
+    bool     has_bios_hle;
+    bool     has_state_slot;
     // (no has_fullscreen_toggle: the Fullscreen row is universal — every
     // console draws it; the ABI flag of that name is deprecated/ignored.)
     bool     has_bios;
@@ -863,6 +866,7 @@ bool launcher_model_aspect_offered(const LauncherModel* m, int index);  // 0=4:3
 // ---- audio settings ----
 void launcher_model_cycle_freq(LauncherModel* m);    // 32000/44100/48000
 void launcher_model_volume_delta(LauncherModel* m, int delta);  // clamp 0..100
+void launcher_model_toggle_audio(LauncherModel* m);
 
 // ---- deeper PSX-style settings (capability-gated; no-op / harmless when the
 // corresponding has_* flag is false — callers should still gate the UI on the
@@ -954,6 +958,9 @@ void launcher_model_toggle_frame_interp(LauncherModel* m);
 void launcher_model_cycle_interp_fps(LauncherModel* m);        // {0,90,120,144,165,240} wrap
 const char* launcher_model_interp_fps_label(const LauncherModel* m);  // "Display refresh"/"90 fps"
 void launcher_model_toggle_spu_hq(LauncherModel* m);
+void launcher_model_toggle_fast_boot(LauncherModel* m);
+void launcher_model_toggle_bios_hle(LauncherModel* m);
+void launcher_model_set_state_slot(LauncherModel* m, int slot);
 // Local rewind on/off. Off by default: the ring holds whole-machine snapshots
 // on a frame cadence, so it is opt-in rather than a cost every host pays.
 void launcher_model_toggle_rewind_enabled(LauncherModel* m);

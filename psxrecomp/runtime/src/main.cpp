@@ -1412,6 +1412,7 @@ static void apply_internal_resolution(int display_px_h) {
     return psx_ir_from_supersampling(g_video_scale < 1 ? 1 : g_video_scale, g_video_ref_lines);
 }
 static std::string   g_saved_argv0;
+static std::vector<std::string> g_saved_argv;
 static bool          g_fast_boot      = false;
 static bool          g_bios_hle       = false;
 static std::string   g_bezel_path;      /* mod-owned OpenGL margin artwork */
@@ -1421,6 +1422,8 @@ static int           g_video_screen   = 0;  /* 0=raw,1=crt,2=composite,3=trinitr
 static int           g_video_win_w    = 0;    /* 0 = fit the display; see clamp_window_aspect */
 static bool          g_audio_spu_hq   = false; /* SPU float-shadow (env overrides) */
 static int           g_audio_freq     = 44100; /* host device request */
+static bool          g_audio_enabled  = true;
+static int           g_audio_restore_volume = 100;
 static int           g_auto_skip_fmv  = 0;   /* skip FMVs the instant they're detected */
 /* Local rewind is opt-in: the snap ring is whole-machine state on a frame
  * cadence, too much to charge every host for a feature many never open. */
@@ -7719,6 +7722,7 @@ static std::filesystem::path g_active_settings_path;
 
 static RecompRuntimeUi* g_psx_overlay_ui = nullptr;
 static int g_psx_overlay_open = 0;
+static bool g_overlay_resolution_changed = false;
 static SDL_Keycode g_psx_overlay_open_key = 0;
 static uint32_t g_psx_overlay_pixels[640 * 480];
 
@@ -7759,7 +7763,7 @@ static int get_current_window_scale(void) {
 
 static void psx_overlay_ui_save(void* ctx);
 
-static void psx_relaunch_to_launcher(void) {
+static void psx_prepare_process_relaunch(void) {
     if (g_psx_overlay_ui) recomp_runtime_ui_close(g_psx_overlay_ui);
     psx_overlay_ui_save(nullptr);
     shutdown_runtime();
@@ -7771,6 +7775,10 @@ static void psx_relaunch_to_launcher(void) {
     if (sdl_window) { SDL_DestroyWindow(sdl_window); sdl_window = nullptr; }
     if (s_headless_gl_window) { SDL_DestroyWindow(s_headless_gl_window); s_headless_gl_window = nullptr; }
     SDL_Quit();
+}
+
+static void psx_relaunch_to_launcher(void) {
+    psx_prepare_process_relaunch();
 
     if (!g_saved_argv0.empty()) {
         std::error_code ec;
@@ -7785,6 +7793,33 @@ static void psx_relaunch_to_launcher(void) {
 #endif
     }
     std::exit(0);
+}
+
+static void psx_restart_game(void) {
+    psx_prepare_process_relaunch();
+    if (g_saved_argv.empty()) std::exit(1);
+
+    std::error_code ec;
+    std::filesystem::path path = std::filesystem::absolute(g_saved_argv0, ec);
+    const std::string exe = ec ? g_saved_argv0 : path.string();
+    std::vector<std::string> args;
+    args.reserve(g_saved_argv.size());
+    args.push_back(exe);
+    args.push_back("--no-launcher");
+    for (size_t i = 1; i < g_saved_argv.size(); ++i) {
+        if (g_saved_argv[i] != "--launcher") args.push_back(g_saved_argv[i]);
+    }
+    std::vector<char*> argv;
+    argv.reserve(args.size() + 1);
+    for (std::string& arg : args) argv.push_back(arg.data());
+    argv.push_back(nullptr);
+#ifdef _WIN32
+    if (_spawnv(_P_NOWAIT, exe.c_str(), argv.data()) >= 0) std::exit(0);
+#else
+    execv(exe.c_str(), argv.data());
+#endif
+    std::perror("psxrecomp: restart failed");
+    std::exit(1);
 }
 
 static int psx_overlay_ui_get_value(void* ctx, const RecompRuntimeUiItem* item, int* value_out) {
@@ -7865,7 +7900,7 @@ static int psx_overlay_ui_get_value(void* ctx, const RecompRuntimeUiItem* item, 
         return 1;
     }
     if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_AUDIO) == 0) {
-        *value_out = (host_volume_get() > 0) ? 1 : 0;
+        *value_out = g_audio_enabled ? 1 : 0;
         return 1;
     }
     if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_VOLUME) == 0) {
@@ -7996,6 +8031,8 @@ static int psx_overlay_ui_set_value(void* ctx, const RecompRuntimeUiItem* item, 
     }
     if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_RESOLUTION_SCALE) == 0) {
         g_video_scale = std::max(1, std::min(8, value));
+        g_video_internal_res = PSX_IR_UNSET;
+        g_overlay_resolution_changed = true;
         char msg[32];
         std::snprintf(msg, sizeof(msg), "Resolution %dx", g_video_scale);
         host_osd_push(msg, 1200);
@@ -8037,12 +8074,20 @@ static int psx_overlay_ui_set_value(void* ctx, const RecompRuntimeUiItem* item, 
         return 1;
     }
     if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_AUDIO) == 0) {
-        if (!value) host_volume_set(0);
-        else if (host_volume_get() == 0) host_volume_set(80);
+        if (!value) {
+            if (host_volume_get() > 0) g_audio_restore_volume = host_volume_get();
+            g_audio_enabled = false;
+            host_volume_set(0);
+        } else {
+            g_audio_enabled = true;
+            host_volume_set(g_audio_restore_volume > 0 ? g_audio_restore_volume : 80);
+        }
         return 1;
     }
     if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_VOLUME) == 0) {
         host_volume_set(value);
+        if (value > 0) g_audio_restore_volume = value;
+        g_audio_enabled = value > 0;
         return 1;
     }
     if (std::strcmp(item->key, "input.dual_analog") == 0) {
@@ -8080,6 +8125,10 @@ static int psx_overlay_ui_run_action(void* ctx, const RecompRuntimeUiItem* item)
     }
     if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_LOAD_STATE) == 0) {
         savestate_submit_slot(savestate_menu_slot, 0);
+        return 1;
+    }
+    if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_RESTART) == 0) {
+        psx_restart_game();
         return 1;
     }
     if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_RETURN_TO_LAUNCHER) == 0) {
@@ -8125,6 +8174,8 @@ static void psx_overlay_ui_save(void* ctx) {
     settings.has_fmv_filter = true;
     settings.supersampling = g_video_scale;
     settings.has_supersampling = true;
+    if (g_overlay_resolution_changed)
+        settings.has_internal_resolution = false;
     settings.antialiasing = g_video_aa;
     settings.has_antialiasing = true;
     settings.screen_kind = g_video_screen;
@@ -8157,7 +8208,14 @@ static void psx_overlay_ui_save(void* ctx) {
     settings.has_bios_hle = true;
     settings.rewind = (g_rewind_enabled != 0);
     settings.has_rewind = true;
-    PSXRecompV4::save_user_settings(g_active_settings_path, settings);
+    settings.audio_volume = g_audio_enabled ? host_volume_get() : g_audio_restore_volume;
+    settings.audio_enabled = g_audio_enabled;
+    settings.has_audio_enabled = true;
+    settings.has_audio_volume = true;
+    settings.savestate_slot = savestate_menu_slot + 1;
+    settings.has_savestate_slot = true;
+    if (PSXRecompV4::save_user_settings(g_active_settings_path, settings))
+        g_overlay_resolution_changed = false;
 }
 
 static void psx_overlay_ui_visibility_changed(void* ctx, int open) {
@@ -8270,6 +8328,7 @@ static void psx_overlay_ensure_ui(void) {
                    RECOMP_RUNTIME_UI_STANDARD_SAVE_STATE |
                    RECOMP_RUNTIME_UI_STANDARD_LOAD_STATE |
                    RECOMP_RUNTIME_UI_STANDARD_RETURN_TO_LAUNCHER |
+                   RECOMP_RUNTIME_UI_STANDARD_RESTART |
                    RECOMP_RUNTIME_UI_STANDARD_QUIT;
     cfg.view_modes = RECOMP_RUNTIME_UI_VIEW_MODE_NATIVE | RECOMP_RUNTIME_UI_VIEW_MODE_FIXED_16_9;
     cfg.native_view_label = "4:3 Standard";
@@ -16414,7 +16473,6 @@ namespace {
         int game_players_n,
         bool ws_offered_b,
         bool ws_ultrawide_offered_b,
-        bool skip_fmv_offered_b,
         bool turbo_loads_offered_b,
         bool vulkan_offered_b,
         bool ctrl_lock_mode_b,
@@ -16448,6 +16506,8 @@ namespace {
         gi->locked_pad_mode = locked_pad_mode_i;
         gi->lock_device = ctrl_lock_device_b ? 1 : 0;
         gi->has_dual_analog_buttons = dual_analog_buttons_offered ? 1 : 0;
+        gi->has_fast_boot = 1;
+        gi->has_bios_hle = 1;
         gi->aspect_mask = ws_offered_b ? (2 | (ws_ultrawide_offered_b ? 4 : 0)) : 0;
         gi->renderer_labels = kPsxRendererLabels;
         gi->num_renderers = vulkan_offered_b ? 3 : 2;
@@ -16472,7 +16532,8 @@ namespace {
             gi->assist_direct_pad_bind_action = g_title_direct_shortcut + 1;
         }
 #endif
-        gi->has_skip_fmv = skip_fmv_offered_b ? 1 : 0;
+        gi->has_skip_fmv = 1;
+        gi->has_frame_interp = 1;
         gi->has_turbo_loads = turbo_loads_offered_b ? 1 : 0;
         /* The Perspective textures row. Hidden for a title that ships PGXP
          * through the psx.enhancement.pgxp mod ([video] pgxp_mod_only): the
@@ -16646,8 +16707,10 @@ static uint32_t gcs_gate_read_ram(uint32_t phys, uint32_t size) {
 }
 
 int main(int argc, char** argv) {
-    if (argv && argv[0])
+    if (argv && argv[0]) {
         g_saved_argv0 = argv[0];
+        g_saved_argv.assign(argv, argv + argc);
+    }
     /* Force line-buffered output so messages appear even if killed. */
     std::setvbuf(stdout, nullptr, _IOLBF, BUFSIZ);
     std::setvbuf(stderr, nullptr, _IOLBF, BUFSIZ);
@@ -16915,8 +16978,6 @@ int main(int argc, char** argv) {
      * mod-owned and is not exposed through the generic settings surface. */
     bool ws_offered = false;
     bool ws_ultrawide_offered = false;
-    constexpr bool frame_interpolation_offered = false;
-    constexpr bool skip_fmv_offered = false;
     /* Load acceleration is likewise mod-owned (Fast Loading / CD Speed). The
      * former game.toml `offer_turbo_loads` opt-out is deprecated and ignored:
      * offering the generic switch is no longer possible for any title, so a
@@ -17661,6 +17722,12 @@ int main(int argc, char** argv) {
             g_video_aspect_den = us.aspect_den;
         }
         if (us.has_audio_freq)     g_audio_freq      = us.audio_freq;
+        if (us.has_audio_volume) g_audio_restore_volume = us.audio_volume;
+        if (us.has_audio_enabled) g_audio_enabled = us.audio_enabled;
+        else g_audio_enabled = g_audio_restore_volume > 0;
+        host_volume_set(g_audio_enabled ? g_audio_restore_volume : 0);
+        if (us.has_savestate_slot)
+            savestate_menu_slot = std::max(0, std::min(11, us.savestate_slot - 1));
         if (us.has_spu_hq)         g_audio_spu_hq    = us.spu_hq;
         if (us.has_rewind)        g_rewind_enabled = us.rewind ? 1 : 0;
         if (us.has_rewind_depth)  g_rewind_depth   = us.rewind_depth;
@@ -17789,15 +17856,6 @@ int main(int argc, char** argv) {
 #endif
         }
     }
-    /* Skip FMVs is mod-owned on PSX. Clamp stale generic settings before
-     * seeding recomp-ui; an enabled activation plugin applies the feature
-     * after the final mod-plan commit. */
-    if (!skip_fmv_offered && g_auto_skip_fmv) {
-        std::fprintf(stdout,
-            "psxrecomp: Skip FMVs is mod-owned on PSX; "
-            "ignoring the legacy Settings value\n");
-        g_auto_skip_fmv = 0;
-    }
     /* Load acceleration is mod-owned on PSX, unconditionally. Nothing upstream
      * of this point is allowed to have enabled it (the game.toml and
      * settings.toml keys are both deprecated and ignored), so this is a
@@ -17809,17 +17867,6 @@ int main(int argc, char** argv) {
             "psxrecomp: Turbo loads is mod-owned on PSX; "
             "ignoring the legacy value\n");
         g_turbo_loads_enabled = 0;
-    }
-    /* Treat presentation interpolation the same way when a title moves it to
-     * Mods. Both the boolean and target rate are cleared so launcher-less
-     * starts cannot revive an old generic Settings selection. */
-    if (!frame_interpolation_offered &&
-        (g_frame_interpolation || g_frame_interpolation_fps)) {
-        std::fprintf(stdout,
-            "psxrecomp: Frame interpolation is mod-owned for this title; "
-            "ignoring the legacy Settings value\n");
-        g_frame_interpolation = 0;
-        g_frame_interpolation_fps = 0;
     }
 
     /* Widescreen/View mode is mod-owned on PSX. Clamp the generic display
@@ -18228,7 +18275,7 @@ int main(int argc, char** argv) {
             seed.scanline_strength = g_video_scanline_strength;
             seed.has_scanline_strength = true;
             seed.auto_skip_fmv = (g_auto_skip_fmv != 0);
-            seed.has_auto_skip_fmv = skip_fmv_offered;
+            seed.has_auto_skip_fmv = true;
             seed.turbo_loads = (g_turbo_loads_enabled != 0);
             seed.has_turbo_loads = turbo_loads_offered;
             seed.fast_boot = fast_boot;                   seed.has_fast_boot = true;
@@ -18241,6 +18288,10 @@ int main(int argc, char** argv) {
             seed.aspect_num = g_video_aspect_num;
             seed.aspect_den = g_video_aspect_den;         seed.has_aspect_ratio = true;
             seed.audio_freq = g_audio_freq;               seed.has_audio_freq = true;
+            seed.audio_volume = g_audio_enabled ? host_volume_get() : g_audio_restore_volume;
+            seed.has_audio_volume = true;
+            seed.audio_enabled = g_audio_enabled;          seed.has_audio_enabled = true;
+            seed.savestate_slot = savestate_menu_slot + 1; seed.has_savestate_slot = true;
             seed.spu_hq = g_audio_spu_hq;                 seed.has_spu_hq = true;
             seed.rewind = g_rewind_enabled != 0;          seed.has_rewind = true;
             seed.rewind_depth = g_rewind_depth;           seed.has_rewind_depth = true;
@@ -18367,9 +18418,10 @@ int main(int argc, char** argv) {
             ls.linear_filter  = (seed.texture_filter != 0) ? 1 : 0;
             ls.widescreen     = (seed.aspect_num == 16 && seed.aspect_den == 9) ? 1 : 0;
             ls.widescreen_hud = ls.widescreen;
-            ls.enable_audio   = 1;
+            ls.enable_audio   = seed.audio_enabled ? 1 : 0;
             ls.audio_freq     = seed.audio_freq;
-            ls.volume         = host_volume_get();
+            ls.volume         = seed.audio_volume;
+            ls.state_slot     = seed.savestate_slot;
             {
                 const int n = std::min(PSX_MAX_PLAYERS, RECOMP_LAUNCHER_MAX_PLAYERS);
                 for (int i = 0; i < n; ++i) {
@@ -18452,6 +18504,8 @@ int main(int argc, char** argv) {
             ls.frame_interp       = seed.frame_interpolation ? 1 : 0;
             ls.frame_interp_fps   = seed.frame_interpolation_fps;
             ls.spu_hq             = seed.spu_hq ? 1 : 0;
+            ls.fast_boot          = seed.fast_boot ? 1 : 0;
+            ls.bios_hle           = seed.bios_hle ? 1 : 0;
             ls.rewind_enabled    = seed.rewind ? 1 : 0;
             ls.rewind_depth      = seed.rewind_depth > 0 ? seed.rewind_depth : 50;
             ls.rewind_interval   = seed.rewind_interval > 0 ? seed.rewind_interval : 15;
@@ -18564,7 +18618,6 @@ int main(int argc, char** argv) {
                 game_players,
                 ws_offered,
                 ws_ultrawide_offered,
-                skip_fmv_offered,
                 turbo_loads_offered,
                 vulkan_offered,
                 ctrl_lock_mode,
@@ -18822,7 +18875,13 @@ int main(int argc, char** argv) {
 #endif
                 seed.frame_interpolation   = ls.frame_interp != 0;     seed.has_frame_interpolation   = true;
                 seed.frame_interpolation_fps = ls.frame_interp_fps;    seed.has_frame_interpolation_fps = true;
+                seed.fast_boot = ls.fast_boot != 0;                    seed.has_fast_boot = true;
+                seed.bios_hle = ls.bios_hle != 0;                      seed.has_bios_hle = true;
                 seed.audio_freq            = ls.audio_freq;            seed.has_audio_freq            = true;
+                seed.audio_volume          = ls.volume;                seed.has_audio_volume          = true;
+                seed.audio_enabled         = ls.enable_audio != 0;     seed.has_audio_enabled         = true;
+                seed.savestate_slot         = std::max(1, std::min(12, ls.state_slot));
+                seed.has_savestate_slot     = true;
                 seed.spu_hq                = ls.spu_hq != 0;           seed.has_spu_hq                = true;
                 seed.rewind                = ls.rewind_enabled != 0;
                 seed.has_rewind            = true;
@@ -18846,10 +18905,12 @@ int main(int argc, char** argv) {
                     ls.assist_pad_bind[PSX_ASSIST_BIND_FAST_FORWARD_TOGGLE], 0);
                 seed.has_hotkey_pad_fast_forward_toggle = true;
                 seed.auto_skip_fmv = ls.auto_skip_fmv != 0;
-                seed.has_auto_skip_fmv = skip_fmv_offered;
+                seed.has_auto_skip_fmv = true;
                 seed.turbo_loads = ls.turbo_loads != 0;
                 seed.has_turbo_loads = turbo_loads_offered;
-                host_volume_set(ls.volume);
+                g_audio_enabled = ls.enable_audio != 0;
+                g_audio_restore_volume = ls.volume > 0 ? ls.volume : g_audio_restore_volume;
+                host_volume_set(g_audio_enabled ? ls.volume : 0);
                 /* Bundled-BIOS builds ignore any launcher-supplied path (the
                  * picker is hidden, but a stale settings file could still
                  * carry one) — resolve_bios_for_runtime would reject it and
@@ -18926,10 +18987,8 @@ int main(int argc, char** argv) {
                             seed.turbo_loads = caps->turbo_loads != 0;
                             seed.has_turbo_loads = true;
                         }
-                        if (skip_fmv_offered) {
-                            seed.auto_skip_fmv = caps->auto_skip_fmv != 0;
-                            seed.has_auto_skip_fmv = true;
-                        }
+                        seed.auto_skip_fmv = caps->auto_skip_fmv != 0;
+                        seed.has_auto_skip_fmv = true;
                         if (caps->language[0]) {
                             seed.language = caps->language;
                             seed.has_language = true;
@@ -19091,17 +19150,23 @@ int main(int argc, char** argv) {
                     g_video_scanline_strength = (float)seed.scanline_strength;
                 gl_renderer_set_scanlines(g_video_scanlines ? 1 : 0,
                                           g_video_scanline_strength);
-                g_auto_skip_fmv = skip_fmv_offered && seed.auto_skip_fmv ? 1 : 0;
+                g_auto_skip_fmv = seed.auto_skip_fmv ? 1 : 0;
                 g_turbo_loads_enabled =
                     turbo_loads_offered && seed.turbo_loads ? 1 : 0;
                 fast_boot = seed.fast_boot;
+                g_fast_boot = fast_boot;
                 bios_hle  = seed.bios_hle;
+                g_bios_hle = bios_hle;
                 g_fullscreen      = seed.fullscreen;
                 g_frame_interpolation = seed.frame_interpolation ? 1 : 0;
                 g_frame_interpolation_fps = seed.frame_interpolation_fps;
                 g_video_aspect_num = seed.aspect_num;
                 g_video_aspect_den = seed.aspect_den;
                 g_audio_freq      = seed.audio_freq;
+                g_audio_enabled   = seed.audio_enabled;
+                g_audio_restore_volume = seed.audio_volume;
+                host_volume_set(g_audio_enabled ? g_audio_restore_volume : 0);
+                savestate_menu_slot = std::max(0, std::min(11, seed.savestate_slot - 1));
                 g_audio_spu_hq    = seed.spu_hq;
                 g_rewind_enabled = seed.has_rewind ? (seed.rewind ? 1 : 0) : 0;
                 g_rewind_depth   = seed.has_rewind_depth && seed.rewind_depth > 0
@@ -19258,9 +19323,6 @@ int main(int argc, char** argv) {
         /* The helper restores interpolation and Skip FMVs to their
          * pre-activation values, which is only right while no launcher
          * control owns them. */
-        static_assert(!frame_interpolation_offered && !skip_fmv_offered,
-                      "reset_mod_owned_presentation() would clobber a launcher "
-                      "setting; restore only when the feature is mod-owned");
         reset_mod_owned_presentation();
         /* Netplay own-view mods: the widescreen margin follows them into the
          * sandboxed own view only; the shared game keeps the stock cull. */
@@ -20922,9 +20984,10 @@ soft_return_lobby:
         ls.widescreen =
             (g_video_aspect_num == 16 && g_video_aspect_den == 9) ? 1 : 0;
         ls.widescreen_hud = ls.widescreen;
-        ls.enable_audio = 1;
+        ls.enable_audio = g_audio_enabled ? 1 : 0;
         ls.audio_freq = g_audio_freq;
-        ls.volume = host_volume_get();
+        ls.volume = g_audio_enabled ? host_volume_get() : g_audio_restore_volume;
+        ls.state_slot = savestate_menu_slot + 1;
         ls.window_width = g_video_win_w;
         ls.renderer = g_video_renderer;
         if (ls.renderer < 0 || ls.renderer > (vulkan_offered ? 2 : 1))
@@ -20961,7 +21024,9 @@ soft_return_lobby:
         ls.frame_interp = g_frame_interpolation ? 1 : 0;
         ls.frame_interp_fps = g_frame_interpolation_fps;
         ls.spu_hq = g_audio_spu_hq ? 1 : 0;
-        ls.auto_skip_fmv = (skip_fmv_offered && g_auto_skip_fmv) ? 1 : 0;
+        ls.fast_boot = g_fast_boot ? 1 : 0;
+        ls.bios_hle = g_bios_hle ? 1 : 0;
+        ls.auto_skip_fmv = g_auto_skip_fmv ? 1 : 0;
         ls.turbo_loads = (turbo_loads_offered && g_turbo_loads_enabled) ? 1 : 0;
         ls.rewind_enabled = g_rewind_enabled;
         ls.rewind_depth = g_rewind_depth;
@@ -21092,7 +21157,6 @@ soft_return_lobby:
             game_players,
             ws_offered,
             ws_ultrawide_offered,
-            skip_fmv_offered,
             turbo_loads_offered,
             vulkan_offered,
             ctrl_lock_mode,
@@ -21161,7 +21225,10 @@ soft_return_lobby:
              * one; the first-boot path re-reads keybinds.ini after the
              * launcher returns, and so must this one. */
             psx_keybinds_init(argv[0]);
-            host_volume_set(ls.volume);
+            g_audio_enabled = ls.enable_audio != 0;
+            g_audio_restore_volume = ls.volume > 0 ? ls.volume : g_audio_restore_volume;
+            host_volume_set(g_audio_enabled ? ls.volume : 0);
+            savestate_menu_slot = std::max(0, std::min(11, ls.state_slot - 1));
             if (rui_out_disc[0]) {
                 resolved_disc = normalize_disc_path_for_launch(rui_out_disc);
                 disc_path_str = resolved_disc.string();
@@ -21380,6 +21447,16 @@ soft_return_lobby:
                 us.has_frame_interpolation_fps = true;
                 us.audio_freq = ls.audio_freq;
                 us.has_audio_freq = true;
+                us.fast_boot = ls.fast_boot != 0;
+                us.has_fast_boot = true;
+                us.bios_hle = ls.bios_hle != 0;
+                us.has_bios_hle = true;
+                us.audio_volume = ls.volume;
+                us.has_audio_volume = true;
+                us.audio_enabled = ls.enable_audio != 0;
+                us.has_audio_enabled = true;
+                us.savestate_slot = std::max(1, std::min(12, ls.state_slot));
+                us.has_savestate_slot = true;
                 us.spu_hq = ls.spu_hq != 0;
                 us.has_spu_hq = true;
                 us.rewind = ls.rewind_enabled != 0;
@@ -21404,7 +21481,7 @@ soft_return_lobby:
                     ls.assist_pad_bind[PSX_ASSIST_BIND_FAST_FORWARD_TOGGLE], 0);
                 us.has_hotkey_pad_fast_forward_toggle = true;
                 us.auto_skip_fmv = ls.auto_skip_fmv != 0;
-                us.has_auto_skip_fmv = skip_fmv_offered;
+                us.has_auto_skip_fmv = true;
                 us.turbo_loads = ls.turbo_loads != 0;
                 us.has_turbo_loads = turbo_loads_offered;
                 us.fullscreen = ls.fullscreen;
@@ -21453,13 +21530,17 @@ soft_return_lobby:
              * offered flags are false for both, so leave both globals alone;
              * the rematch's start_mod_session() below resets and re-decides
              * both. */
-            if (skip_fmv_offered)     g_auto_skip_fmv = ls.auto_skip_fmv ? 1 : 0;
+            g_auto_skip_fmv = ls.auto_skip_fmv ? 1 : 0;
             if (turbo_loads_offered)  g_turbo_loads_enabled = ls.turbo_loads ? 1 : 0;
             g_fullscreen = ls.fullscreen;
             g_frame_interpolation = ls.frame_interp ? 1 : 0;
             g_frame_interpolation_fps = ls.frame_interp_fps;
             g_audio_freq = ls.audio_freq;
             g_audio_spu_hq = ls.spu_hq != 0;
+            fast_boot = ls.fast_boot != 0;
+            g_fast_boot = fast_boot;
+            bios_hle = ls.bios_hle != 0;
+            g_bios_hle = bios_hle;
             if (ls.rewind_depth > 0) {
                 g_rewind_depth = ls.rewind_depth;
                 psx_rewind_set_depth((uint32_t)g_rewind_depth);

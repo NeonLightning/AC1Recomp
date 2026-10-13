@@ -90,6 +90,7 @@ enum {
 #define RECOMP_RUNTIME_UI_KEY_PAUSE_IN_MENU     "system.pause_in_menu"
 #define RECOMP_RUNTIME_UI_KEY_RESET             "system.reset"
 #define RECOMP_RUNTIME_UI_KEY_RETURN_TO_LAUNCHER "system.return_to_launcher"
+#define RECOMP_RUNTIME_UI_KEY_RESTART             "system.restart"
 #define RECOMP_RUNTIME_UI_KEY_QUIT              "system.quit"
 
 typedef struct RecompRuntimeUiItem {
@@ -199,6 +200,8 @@ enum {
     RECOMP_RUNTIME_UI_STANDARD_PAUSE_IN_MENU     = UINT64_C(1) << 20,
     /* The slot Save state / Load state use, 1 to state_slot_count. */
     RECOMP_RUNTIME_UI_STANDARD_STATE_SLOT        = UINT64_C(1) << 21,
+    /* Restart the host/game process. The standard builder asks for a second press. */
+    RECOMP_RUNTIME_UI_STANDARD_RESTART            = UINT64_C(1) << 22,
 };
 
 typedef struct RecompRuntimeUiStandardConfig {
