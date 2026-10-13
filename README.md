@@ -1,130 +1,108 @@
-# AC1
+# Armored Core (PSX Recompilation)
 
-<!-- retcomm-readme-metrics -->
-[![GitHub downloads (all assets, all releases)](https://img.shields.io/github/downloads/neonlightning/AC1/total)](https://github.com/neonlightning/AC1/releases)
-[![GitHub downloads (latest release)](https://img.shields.io/github/downloads/neonlightning/AC1/latest/total)](https://github.com/neonlightning/AC1/releases/latest)
-[![GitHub release](https://img.shields.io/github/v/release/neonlightning/AC1)](https://github.com/neonlightning/AC1/releases/latest)
-<!-- /retcomm-readme-metrics -->
+A native PC port of **Armored Core** (USA / SCUS-94182) generated via static recompilation with enhanced rendering, widescreen support, customizable controls, and in-game settings.
 
-Static recompilation of **AC1** built on
-[psxrecomp](https://github.com/mstan/psxrecomp) and
-[recomp-ui](https://github.com/RetroPortingToolKit/recomp-ui).
-
-_Add a short pitch in catalog_identity.json / README._
-
-| | |
-|---|---|
-| Players | 1 |
-| Region | USA |
-| Publisher | — |
-| Year | — |
-
-Scaffolded with the New Project Layout. See
-`psxrecomp/docs/GAME_PROJECT_SETUP.md` for the full flow.
-
-<!-- retcomm-readme-launcher -->
-## Retro Launcher
-
-You can run this title **standalone** (download the release zip, point it at
-your disc, play), or manage installs, updates, and disc/BIOS wiring with
-**[Retro Launcher](https://github.com/RetroPortingToolKit/Retro-Launcher)** —
-the Retro Compilation Manager hub for self-compiling recomps.
-
-[Downloads](https://github.com/RetroPortingToolKit/Retro-Launcher/releases) ·
-[Full README & features](https://github.com/RetroPortingToolKit/Retro-Launcher#readme)
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/RetroPortingToolKit/Retro-Launcher/main/docs/screenshots/hub-and-game-launcher.png" alt="Retro hub with a background build, next to a title’s recomp-ui launcher" width="720">
-</p>
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/RetroPortingToolKit/Retro-Launcher/main/docs/screenshots/queue-and-background-build.png" alt="Background cmake build with titles queued" width="720">
-</p>
-
-Retro checks for updates, installs the prebuilt release zips, and automates
-BIOS/ROM/save plumbing so you are not stuck repeating each game’s first run by hand.
-<!-- /retcomm-readme-launcher -->
-
-## Legal
-
-You must own the original game. Disc images under `disc/` are gitignored and
-must never be committed. Retail BIOS dumps are not redistributed and no C
-derived from one may be committed; releases run on the bundled MIT OpenBIOS.
-
-`generated/` (the recompiled game C) **is committed**: releases ship the
-compiled game, built by CI from that tree. Regenerate and commit it whenever
-seeds or the framework pin change.
-
-Default app icon: `assets/psxrecomp.ico` (and `.png` / `.svg`) — Retro-themed controller mark from `psxrecomp/assets/`. Windows builds embed it via `APP_ICON`.
-
-Optional box art under `launcher_assets/img/` may come from
-[libretro-thumbnails](https://github.com/libretro-thumbnails/libretro-thumbnails)
-(`Named_Boxarts`); see `BOXART_SOURCE.txt` when present.
-
-## Quick start (dev)
-
-```bash
-git submodule update --init --recursive
-./psxrecomp/tools/ci/build_emitters.sh
-python3 psxrecomp/psxrecomp_cli.py generate \
-  --config game.toml --project-root . --disc disc/<your>.cue
-git add generated && git commit -m "Regenerate game C"
-cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build-release --target psx-runtime
-```
-
-### Enable Vulkan on Arch Linux
-
-The Vulkan renderer is experimental and must be compiled into the runtime and
-offered by the game config. On Arch Linux, install the headers and shader
-compiler:
-
-```sh
-sudo pacman -S vulkan-headers shaderc
-```
-
-Make sure `game.toml` has `offer_vulkan = true` in its `[video]` section. Then
-configure and build in a fresh build directory (for example, `build-current`):
-
-```sh
-cmake -S . -B build-current -G Ninja -DCMAKE_BUILD_TYPE=Release \
-  -DPSXRECOMP_ROOT="$PWD/psxrecomp" -DPSX_ENABLE_VULKAN=ON -DPSX_RECOMP_UI=ON
-cmake --build build-current --target psx-runtime -j"$(nproc)"
-```
-
-During configuration, confirm CMake reports that Vulkan headers and `glslc`
-were found. If it says the backend will build as a software stub, check that
-`vulkan/vulkan.h` and `glslc` are installed, then rerun the configure command.
-Launch `build-current/AC1` and select Vulkan in Settings → Display → Renderer.
-Use a fresh build directory if an existing CMake cache belongs to another
-checkout; CMake cannot safely reuse that cache.
-
-Releases: tag `vX.Y.Z` (or run the *Release builds* workflow). CI builds the
-committed `generated/` C on Linux, Windows and macOS and attaches
-`ac1-<version>-<platform>.zip`, the compiled game. Locally:
-`scripts/package_release.sh build-release linux-x64`.
-
-## Symbols
-
-Progressive map: `symbols.toml` → `python3 tools/sync_symbols.py` →
-`psx_symbols.h` (`PSX_FN_*`). See `psxrecomp/docs/SYMBOLS.md`.
-
-## Framework pins
-
-Submodule gitlinks (`psxrecomp`, optional `recomp-ui`, nested `recomp-net`)
-are authoritative. `framework_pins.txt` is an optional scaffold snapshot;
-release CI logs SHAs with `record_pins.sh` but builds whatever the gitlinks
-resolve to. Bump submodules deliberately — do not float on `main`/`master`
-in release CI.
-
-<!-- retcomm-readme-raid -->
 ---
 
-<p align="center">
-  <sub><b>R.A.I.D. — Retro AI Development</b> · a Discord for AI-assisted retro reverse-engineering, decomp &amp; recomp</sub>
-</p>
+## Building the Project
 
-<p align="center">
-  <a href="https://discord.gg/Ad9BwSzctP"><img src=".github/raid-discord.png" alt="Join the Retro AI Development (R.A.I.D.) Discord" width="200"></a>
-</p>
-<!-- /retcomm-readme-raid -->
+### Prerequisites
+
+#### Linux (Arch Linux / Manjaro)
+```bash
+sudo pacman -S base-devel cmake ninja sdl3 freetype2 harfbuzz libpng zlib openssl vulkan-headers shaderc
+```
+
+#### Linux (Ubuntu / Debian 24.04+)
+```bash
+sudo apt-get update
+sudo apt-get install build-essential cmake ninja-build libsdl3-dev libfreetype-dev libharfbuzz-dev libpng-dev zlib1g-dev libssl-dev libvulkan-dev glslc
+```
+
+### Compiling
+
+The engine runtime and launcher UI are fully vendored in-tree. Configure and build with CMake and Ninja:
+
+```bash
+# Configure release build with Vulkan support
+cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DPSX_ENABLE_VULKAN=ON
+
+# Compile executable
+cmake --build build-release --target psx-runtime -j$(nproc)
+```
+
+The resulting executable will be at `build-release/AC1`.
+
+---
+
+## In-Game Settings Overlay
+
+During gameplay, press the **Xbox (Guide) button** on a controller or the **Escape** key on a keyboard to open the in-game settings overlay. The game pauses while the overlay is open.
+
+- **Navigation**:
+  - **D-Pad / Left Stick** or **Arrow Keys**: Navigate rows and adjust values.
+  - **A Button** or **Enter / Space**: Activate folders, toggle options, or confirm actions.
+  - **B Button** or **Escape**: Go back or close the overlay.
+  - **Guide Button**: Toggle overlay open/close.
+
+### Overlay Options
+
+#### Display
+- **View mode**: Toggle between **16:9 Widescreen** (native-wide 1:1 camera extension) and **4:3 Standard**.
+- **Fullscreen**: Switch between **Windowed**, **Borderless** desktop fullscreen, and **Exclusive** fullscreen.
+- **Window scale**: Adjust window client resolution in integer steps (1x to 8x native height) in windowed mode.
+- **VSync**: Choose between **Off** (lowest input latency), **On** (tear-free), and **Adaptive**.
+- **Scanlines**: Enable CRT scanline post-processing filter.
+- **Scanline strength**: Adjust CRT scanline intensity from 0% to 100%.
+- **Frame interpolation**: Smooth motion frame blending.
+
+#### Graphics
+- **Resolution scale**: Internal rendering resolution from 1x native up to 8x.
+- **Antialiasing**: Smooth present filtering across the frame.
+- **Texture filtering**: Choose between **Nearest** (authentic pixelated) and **Linear** (smoothed).
+- **FMV filtering**: Select scaling algorithm for full-motion video playback (**Nearest**, **Bilinear**, **Sharp**, **Bicubic**).
+- **Screen filter**: Post-processing CRT display simulation presets (**Raw**, **CRT**, **Composite**, **Trinitron**).
+- **Geometry precision**: PGXP sub-pixel vertex precision to eliminate 3D polygon jitter.
+- **Perspective texturing**: PGXP perspective-correct texture mapping to prevent polygon warping.
+- **Skip FMVs**: Automatically bypass pre-rendered video cutscenes on load.
+
+#### Audio
+- **Audio**: Toggle master sound output on or off.
+- **Volume**: Adjust in-game mixer volume (0% to 100%).
+- **SPU high quality**: Enable floating-point audio mixing shadow.
+
+#### Input
+- **Dual analog mode**: Toggle modern twin-stick movement for digital PS1 controls:
+  - **Left Stick**: Forward/Back (D-Pad Up/Down) and Strafe (L1/R1).
+  - **Right Stick**: Aim Up/Down (L2/R2) and Turn (D-Pad Left/Right).
+- **Duplicate face on shoulders**: (Available when Dual analog mode is active) Duplicates physical face buttons to shoulder buttons for modern twin-stick combat:
+  - **L1**: Triangle (Switch weapon)
+  - **R1**: Cross (Boost)
+  - **L2**: Circle (Energy blade)
+  - **R2**: Square (Fire primary weapon)
+
+#### System
+- **Resume game**: Unpause and return to gameplay.
+- **State slot**: Select save-state slot (1–12).
+- **Save state**: Save immediate game snapshot to selected slot.
+- **Load state**: Load snapshot from selected slot.
+- **Fast boot**: Skip the PlayStation BIOS sequence and jump directly into the game.
+- **HLE BIOS**: Toggle high-level BIOS kernel service interception.
+- **Rewind feature**: Toggle memory rewind snapshot capture.
+- **Return to launcher**: Save active settings and reopen the graphical launcher.
+- **Quit game**: Close the application.
+
+---
+
+## Launcher Configuration
+
+When starting the application without skipping the launcher, the GUI offers additional configuration tabs:
+
+- **Display Panel**: Select active graphics renderer (**OpenGL**, **Vulkan**, or **Software**), internal rendering resolution up to 8K, dynamic resolution fallback, and presentation pipeline settings.
+- **Controller Configuration**:
+  - Rebind individual keyboard keys and controller buttons.
+  - Set per-controller stick deadzone percentage.
+  - Toggle **Dual analog mode** and **Duplicate face buttons on shoulders** with an on-screen reference legend.
+- **Audio & System**: Select host audio frequency, manage memory card files (Slot 1 and Slot 2), and switch disc images.
+
+Settings are saved automatically to [game.toml](game.toml) defaults and your user profile in `settings.toml`.
