@@ -1578,6 +1578,7 @@ struct UserSettings {
     bool has_hotkey_pad_volume_down = false; int hotkey_pad_volume_down = 0; /* unbound */
     bool has_hotkey_pad_scanlines = false; int hotkey_pad_scanlines = 0; /* unbound */
     bool has_hotkey_pad_menu = false; int hotkey_pad_menu = 1032; /* guide button */
+    bool has_fast_forward_speed = false; int fast_forward_speed = 4; /* [hotkeys] fast_forward_speed, 2..16 */
     // [audio]
     bool has_audio_enabled   = false; bool audio_enabled = true;
     bool has_audio_volume    = false; int audio_volume = 100;

@@ -5486,6 +5486,23 @@ void draw_assist_binding_editor(LauncherModel* m, const LauncherTheme& th,
         ImGui::TextColored(col(th.warn), "Listening... (Esc cancels, Backspace unbinds)");
 }
 
+static void draw_assist_ff_speed(LauncherModel* m, const LauncherTheme& th) {
+    if (m->assist_fast_forward_max <= m->assist_fast_forward_min) return;
+    ImGui::Dummy(ImVec2(0, px(8)));
+    ImGui::PushStyleColor(ImGuiCol_Text, col(th.accent2));
+    ImGui::TextUnformatted(ui_text("FAST-FORWARD SPEED"));
+    ImGui::PopStyleColor();
+    ImGui::TextColored(col(th.text_muted),
+                       "Target emulation speed while Fast-forward is "
+                       "held or latched.");
+    int speed = m->s.assist_fast_forward_multiplier;
+    ImGui::SetNextItemWidth(px(360));
+    if (ImGui::SliderInt("##assist_fast_forward_speed", &speed,
+                         m->assist_fast_forward_min,
+                         m->assist_fast_forward_max, "%dx"))
+        m->s.assist_fast_forward_multiplier = speed;
+}
+
 void draw_controller_assist_shortcuts(LauncherModel* m,
                                       const LauncherTheme& th) {
     ImGui::PushStyleColor(ImGuiCol_Text, col(th.accent2));
@@ -5540,6 +5557,7 @@ void draw_controller_assist_shortcuts(LauncherModel* m,
     }
     if (pad_col) draw_assist_pad_chord_hint(m, th);
     else         draw_assist_pad_unavailable_hint(m, th);
+    draw_assist_ff_speed(m, th);
     if (m->capturing && m->capture_assist)
         ImGui::TextColored(col(th.warn), "Listening... (Esc cancels, Backspace unbinds)");
 }
@@ -5566,21 +5584,7 @@ void draw_assist_tools(LauncherModel* m, const LauncherTheme& th) {
     // Fast-forward speed. Only hosts that publish a range get the slider; a
     // host that leaves the bounds unset keeps its own fixed rate and the
     // control stays absent rather than dead.
-    if (m->assist_fast_forward_max > m->assist_fast_forward_min) {
-        ImGui::Dummy(ImVec2(0, px(8)));
-        ImGui::PushStyleColor(ImGuiCol_Text, col(th.accent2));
-    ImGui::TextUnformatted(ui_text("FAST-FORWARD SPEED"));
-        ImGui::PopStyleColor();
-        ImGui::TextColored(col(th.text_muted),
-                           "Target emulation speed while Fast-forward is "
-                           "held or latched.");
-        int speed = m->s.assist_fast_forward_multiplier;
-        ImGui::SetNextItemWidth(px(360));
-        if (ImGui::SliderInt("##assist_fast_forward_speed", &speed,
-                             m->assist_fast_forward_min,
-                             m->assist_fast_forward_max, "%dx"))
-            m->s.assist_fast_forward_multiplier = speed;
-    }
+    draw_assist_ff_speed(m, th);
     if (m->settings_bindings) {
         ImGui::Dummy(ImVec2(0, px(8)));
         draw_assist_binding_editor(m, th, "assist_binds", 0, true);

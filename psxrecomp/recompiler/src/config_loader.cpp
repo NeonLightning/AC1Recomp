@@ -3125,6 +3125,13 @@ UserSettings load_user_settings(const fs::path& path) {
                 s.has_hotkey_pad_menu = true;
             }
         });
+        if (h.contains("fast_forward_speed")) try_get([&]{
+            const auto n = toml::find<int64_t>(h, "fast_forward_speed");
+            if (n >= 2 && n <= 16) {
+                s.fast_forward_speed = (int)n;
+                s.has_fast_forward_speed = true;
+            }
+        });
     }
     if (doc.contains("launcher")) {
         const toml::value& l = toml::find(doc, "launcher");
@@ -3432,7 +3439,7 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
         s.has_hotkey_pad_fullscreen || s.has_hotkey_pad_restart ||
         s.has_hotkey_pad_display_perf || s.has_hotkey_pad_volume_up ||
         s.has_hotkey_pad_volume_down || s.has_hotkey_pad_scanlines ||
-        s.has_hotkey_pad_menu) {
+        s.has_hotkey_pad_menu || s.has_fast_forward_speed) {
         f << "\n[hotkeys]\n";
         if (s.has_hotkey_pad_rewind)
             f << "rewind_pad = " << s.hotkey_pad_rewind << "\n";
@@ -3458,6 +3465,8 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
             f << "scanlines_pad = " << s.hotkey_pad_scanlines << "\n";
         if (s.has_hotkey_pad_menu)
             f << "menu_pad = " << s.hotkey_pad_menu << "\n";
+        if (s.has_fast_forward_speed)
+            f << "fast_forward_speed = " << s.fast_forward_speed << "\n";
     }
     if (s.has_skip_launcher)
         f << "\n[launcher]\nskip_launcher = " << (s.skip_launcher ? "true" : "false") << "\n";

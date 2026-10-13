@@ -672,23 +672,25 @@ static bool host_hotkey_input_focused(void) {
     return (SDL_GetWindowFlags(sdl_window) & SDL_WINDOW_INPUT_FOCUS) != 0;
 }
 
+static int g_fast_forward_speed = 4;  /* [hotkeys] fast_forward_speed, 2..16 */
+
 static int manual_fast_forward_multiplier(void) {
-    static int value = -2; /* -2 = unread, -1 = max/unbounded */
-    if (value == -2) {
+    static int env_value = -2; /* -2 = unread, -1 = max/unbounded, 0 = not set */
+    if (env_value == -2) {
         const char *e = std::getenv("PSX_FAST_FORWARD_SPEED");
-        value = 4;
+        env_value = 0;
         if (e && e[0]) {
             if (std::strcmp(e, "max") == 0 || std::strcmp(e, "MAX") == 0 ||
                 std::strcmp(e, "0") == 0) {
-                value = -1;
+                env_value = -1;
             } else {
                 int parsed = std::atoi(e);
                 if (parsed >= 2 && parsed <= 16)
-                    value = parsed;
+                    env_value = parsed;
             }
         }
     }
-    return value;
+    return env_value ? env_value : g_fast_forward_speed;
 }
 
 static void post_load_probe_stall_pc_note(uint32_t pc) {
@@ -1555,6 +1557,8 @@ static int           g_frame_interpolation_blend_default =
 /* Presentation is sped up this VBlank (manual fast-forward, turbo-through-
  * loads, FMV auto-skip, TCP turbo). Render passes are refused meanwhile. */
 static int           s_presentation_fast_forward = 0;
+/* Manual fast-forward was active on the previous frame (audio gate input). */
+static int           s_manual_ff_active = 0;
 extern "C" int psx_presentation_fast_forward(void) {
     return s_presentation_fast_forward;
 }
@@ -9585,7 +9589,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
      * Rollback resim: skip host audio pump (uncapped frames) so SPU/CD audio
      * paths cannot fork peers during the episode window. */
     if (!psx_netplay_is_resimulating() && !psx_selfcheck_resim_active()) {
-        sdl_audio_update(fmv_skip_active,
+        sdl_audio_update(fmv_skip_active || (s_manual_ff_active && !psx_netplay_active()),
                          turbo_loads_active && g_turbo_audio_sink_enabled);
     }
 #endif
@@ -9662,8 +9666,9 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         if (kb_turbo || g_manual_turbo_latched ||
             hotkey_shortcut_down(PSX_ASSIST_BIND_FAST_FORWARD, g_hotkey_pad_fast_forward)) {
             const int mult = manual_fast_forward_multiplier();
-            const int present_every = (mult < 0) ? 4 : (mult <= 4 ? 2 : 4);
+            const int present_every = (mult < 0) ? 8 : (mult <= 2 ? 2 : (mult <= 4 ? 4 : 8));
             manual_turbo_active = true;
+            s_manual_ff_active = 1;
             s_presentation_fast_forward = 1;
             if (!turbo_was_down && !g_manual_turbo_latched) {
                 char msg[40];
@@ -9690,6 +9695,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         } else {
             turbo_skip = 0;
             turbo_was_down = 0;
+            s_manual_ff_active = 0;
         }
     }
 
@@ -16624,6 +16630,8 @@ namespace {
         gi->settings_bindings = 1;
         gi->assist_binding_labels = kPsxHostShortcutLabels;
         gi->assist_binding_count = PSX_ASSIST_BIND_COUNT;
+        gi->assist_fast_forward_min = 2;
+        gi->assist_fast_forward_max = 16;
 #if defined(RECOMP_LAUNCHER_HAS_DIRECT_ASSIST_BIND)
         /* Defaults for Reset; a title-declared direct shortcut is captured as
          * one button and defaulted to the title's button. */
@@ -17878,6 +17886,8 @@ int main(int argc, char** argv) {
         if (us.has_hotkey_pad_menu)
             g_hotkey_pad_menu = normalize_hotkey_pad_binding(
                 us.hotkey_pad_menu, PSX_HOTKEY_PAD_MENU_DEFAULT);
+        if (us.has_fast_forward_speed)
+            g_fast_forward_speed = std::max(2, std::min(16, us.fast_forward_speed));
         if (us.has_hotkey_pad_fast_forward_toggle)
             g_hotkey_pad_fast_forward_toggle = normalize_hotkey_pad_binding(
                 us.hotkey_pad_fast_forward_toggle, 0);
@@ -18452,6 +18462,8 @@ int main(int argc, char** argv) {
             seed.has_hotkey_pad_scanlines = true;
             seed.hotkey_pad_menu = g_hotkey_pad_menu;
             seed.has_hotkey_pad_menu = true;
+            seed.fast_forward_speed = g_fast_forward_speed;
+            seed.has_fast_forward_speed = true;
             seed.skip_launcher = skip_launcher_setting;   seed.has_skip_launcher = true;
             if (has_netplay_player_name) {
                 seed.netplay_player_name = netplay_player_name;
@@ -18683,6 +18695,8 @@ int main(int argc, char** argv) {
             ls.assist_pad_bind[PSX_ASSIST_BIND_MENU] =
                 normalize_hotkey_pad_binding(seed.hotkey_pad_menu,
                     PSX_HOTKEY_PAD_MENU_DEFAULT);
+            ls.assist_fast_forward_multiplier =
+                std::max(2, std::min(16, seed.fast_forward_speed));
             ls.auto_skip_fmv      = seed.auto_skip_fmv ? 1 : 0;
             ls.turbo_loads        = seed.turbo_loads ? 1 : 0;
             /* Localization: index of resolved_language within lang_menu_options
@@ -19089,6 +19103,9 @@ int main(int argc, char** argv) {
                     ls.assist_pad_bind[PSX_ASSIST_BIND_MENU],
                     PSX_HOTKEY_PAD_MENU_DEFAULT);
                 seed.has_hotkey_pad_menu = true;
+                seed.fast_forward_speed =
+                    std::max(2, std::min(16, ls.assist_fast_forward_multiplier));
+                seed.has_fast_forward_speed = true;
                 seed.auto_skip_fmv = ls.auto_skip_fmv != 0;
                 seed.has_auto_skip_fmv = true;
                 seed.turbo_loads = ls.turbo_loads != 0;
@@ -19384,6 +19401,7 @@ int main(int argc, char** argv) {
                     ? seed.hotkey_pad_scanlines : 0;
                 g_hotkey_pad_menu = seed.has_hotkey_pad_menu
                     ? seed.hotkey_pad_menu : PSX_HOTKEY_PAD_MENU_DEFAULT;
+                g_fast_forward_speed = std::max(2, std::min(16, seed.fast_forward_speed));
                 skip_launcher_setting = seed.skip_launcher;
                 if (seed.has_bios_path) {
                     settings_bios_storage = seed.bios_path.string();
@@ -21259,6 +21277,7 @@ soft_return_lobby:
         ls.assist_pad_bind[PSX_ASSIST_BIND_MENU] =
             normalize_hotkey_pad_binding(g_hotkey_pad_menu,
                 PSX_HOTKEY_PAD_MENU_DEFAULT);
+        ls.assist_fast_forward_multiplier = g_fast_forward_speed;
         ls.aspect_index = (g_video_aspect_num * 9 == g_video_aspect_den * 21) ? 2
             : (g_video_aspect_num == 16 && g_video_aspect_den == 9) ? 1 : 0;
         ls.language_index = 0;
@@ -21716,6 +21735,9 @@ soft_return_lobby:
                     ls.assist_pad_bind[PSX_ASSIST_BIND_MENU],
                     PSX_HOTKEY_PAD_MENU_DEFAULT);
                 us.has_hotkey_pad_menu = true;
+                us.fast_forward_speed =
+                    std::max(2, std::min(16, ls.assist_fast_forward_multiplier));
+                us.has_fast_forward_speed = true;
                 us.auto_skip_fmv = ls.auto_skip_fmv != 0;
                 us.has_auto_skip_fmv = true;
                 us.turbo_loads = ls.turbo_loads != 0;
@@ -21823,6 +21845,9 @@ soft_return_lobby:
             g_hotkey_pad_menu = normalize_hotkey_pad_binding(
                 ls.assist_pad_bind[PSX_ASSIST_BIND_MENU],
                 PSX_HOTKEY_PAD_MENU_DEFAULT);
+            if (ls.assist_fast_forward_multiplier >= 2)
+                g_fast_forward_speed =
+                    std::min(16, ls.assist_fast_forward_multiplier);
             switch (ls.aspect_index) {
                 case 2:  g_video_aspect_num = 21; g_video_aspect_den = 9; break;
                 case 1:  g_video_aspect_num = 16; g_video_aspect_den = 9; break;
