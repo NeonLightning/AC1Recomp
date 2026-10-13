@@ -1,0 +1,667 @@
+#define PSX_OVERLAY_DLL_BUILD 1
+#include "overlay_loader.h"
+#undef PSX_OVERLAY_DLL_BUILD
+
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
+
+#define TEST_MARKER 0xC001CAFEu
+#define RAM_SIZE (2u * 1024u * 1024u)
+
+_Static_assert(PSX_OVERLAY_TEST_CANDIDATE_CAP == 4,
+               "pair-dedup harness must exercise the exact four-slot cap");
+
+static uint8_t s_ram[RAM_SIZE];
+static uint8_t s_scratch[1024];
+
+/* Live RAM geometry (psx_memory.h): retail 2 MiB. */
+uint32_t g_psx_ram_size = RAM_SIZE;
+uint32_t g_psx_ram_mask = RAM_SIZE - 1u;
+
+uint32_t g_debug_current_func_addr;
+uint32_t g_debug_last_store_pc;
+uint32_t g_overlay_region_floor;
+uint32_t i_stat, i_mask;
+int g_exec_phase;
+int g_idle_note_suppress;
+int g_psx_call_bail;
+uint32_t g_dirty_ram_code_gen;
+uint64_t g_psx_bail_first, g_psx_bail_resolved;
+uint64_t s_frame_count;
+int g_shadow_mmio_watch;
+uint64_t g_shadow_mmio_hits;
+
+uint8_t *memory_get_ram_ptr(void) { return s_ram; }
+uint8_t *memory_get_scratchpad_ptr(void) { return s_scratch; }
+uint32_t overlay_watch_pagegen_sum(uint32_t phys, uint32_t len) {
+    (void)phys; (void)len; return 0;
+}
+void overlay_watch_set_range(uint32_t phys, uint32_t len) {
+    (void)phys; (void)len;
+}
+void ds_init(const char *cache_dir, const char *game_id) {
+    (void)cache_dir; (void)game_id;
+}
+uint32_t dirty_ram_get_bitmap_word(uint32_t word) { (void)word; return 0; }
+int dirty_ram_is_dirty(uint32_t phys) { (void)phys; return 0; }
+int dirty_ram_dispatch(CPUState *cpu, uint32_t addr, uint32_t stop) {
+    (void)cpu; (void)addr; (void)stop; return 0;
+}
+void dirty_ram_xprobe_call_note(CPUState *cpu, uint32_t target,
+                                uint32_t ra, uint8_t phase) {
+    (void)cpu; (void)target; (void)ra; (void)phase;
+}
+
+void psx_dispatch_call(CPUState *cpu, uint32_t addr, uint32_t ra) {
+    (void)cpu; (void)addr; (void)ra;
+}
+void psx_check_interrupts(CPUState *cpu) { (void)cpu; }
+void psx_check_interrupts_at(CPUState *cpu, uint32_t pc) {
+    (void)cpu; (void)pc;
+}
+int psx_interrupt_delivery_needed(const CPUState *cpu) { (void)cpu; return 0; }
+int psx_get_in_exception(void) { return 0; }
+uint64_t psx_exception_setjmp_epoch(void) { return 0; }
+void psx_restore_state_escape(void) {}
+void psx_rfe_mark_escape(void) {}
+int psx_syscall(CPUState *cpu, uint32_t code) {
+    (void)cpu; (void)code; return 0;
+}
+void psx_unknown_dispatch(CPUState *cpu, uint32_t addr, uint32_t phys) {
+    (void)cpu; (void)addr; (void)phys;
+}
+
+void psx_advance_cycles(uint32_t cycles) { (void)cycles; }
+/* The CPU charge the loader binds as the overlay cpu_charge callback. */
+void psx_cpu_charge(uint32_t cycles) { (void)cycles; }
+uint64_t psx_get_cycle_count(void) { return 0; }
+int psx_cycle_replay_begin(uint64_t cycle) { (void)cycle; return 1; }
+uint64_t psx_cycle_replay_end(void) { return 0; }
+uint32_t psx_cyc_load_word(CPUState *cpu, uint32_t addr, uint32_t rt,
+                           uint32_t mask) {
+    (void)rt; (void)mask;
+    return cpu->read_word ? cpu->read_word(addr) : 0;
+}
+uint32_t psx_cyc_load_word_slow(CPUState *cpu, uint32_t addr, uint32_t rt,
+                                uint32_t mask) {
+    return psx_cyc_load_word(cpu, addr, rt, mask);
+}
+uint16_t psx_cyc_load_half(CPUState *cpu, uint32_t addr, uint32_t rt,
+                           uint32_t mask) {
+    (void)cpu; (void)addr; (void)rt; (void)mask; return 0;
+}
+uint16_t psx_cyc_load_half_slow(CPUState *cpu, uint32_t addr, uint32_t rt,
+                                uint32_t mask) {
+    return psx_cyc_load_half(cpu, addr, rt, mask);
+}
+uint8_t psx_cyc_load_byte(CPUState *cpu, uint32_t addr, uint32_t rt,
+                          uint32_t mask) {
+    (void)cpu; (void)addr; (void)rt; (void)mask; return 0;
+}
+uint32_t psx_cyc_lwc2_read(CPUState *cpu, uint32_t addr) {
+    (void)cpu; (void)addr; return 0;
+}
+int psx_icache_shadow_record_begin(void) { return 1; }
+int psx_icache_shadow_replay_begin(void) { return 1; }
+void psx_icache_shadow_replay_end(void) {}
+void psx_icache_shadow_abort(void) {}
+/* Fetch tags the shards hand the I-cache model, in order (segment-run). */
+static uint32_t s_fetch_log[1024];
+static unsigned s_fetch_n;
+void psx_icache_fetch(CPUState *cpu, uint32_t addr) {
+    (void)cpu;
+    if (s_fetch_n < sizeof(s_fetch_log) / sizeof(s_fetch_log[0]))
+        s_fetch_log[s_fetch_n++] = addr;
+}
+void psx_icache_fetch_fn(CPUState *cpu, uint32_t addr) {
+    psx_icache_fetch(cpu, addr);
+}
+void psx_muldiv_set(CPUState *cpu, uint32_t latency) {
+    (void)cpu; (void)latency;
+}
+void psx_muldiv_stall(CPUState *cpu) { (void)cpu; }
+uint32_t psx_mult_latency_s(uint32_t rs) { (void)rs; return 1; }
+uint32_t psx_mult_latency_u(uint32_t rs) { (void)rs; return 1; }
+void psx_gte_stall(CPUState *cpu) { (void)cpu; }
+void psx_gte_read(CPUState *cpu, uint32_t rt) { (void)cpu; (void)rt; }
+int psx_slice_block(CPUState *cpu, uint32_t addr, uint32_t cycles,
+                    int side_effects) {
+    (void)cpu; (void)addr; (void)cycles; (void)side_effects; return 0;
+}
+int psx_slice_block_impl(CPUState *cpu, uint32_t addr, uint32_t cycles,
+                         int side_effects) {
+    return psx_slice_block(cpu, addr, cycles, side_effects);
+}
+
+void gte_execute(CPUState *cpu, uint32_t cmd) { (void)cpu; (void)cmd; }
+uint32_t gte_read_data(CPUState *cpu, uint8_t reg) {
+    (void)cpu; (void)reg; return 0;
+}
+uint32_t gte_read_ctrl(CPUState *cpu, uint8_t reg) {
+    (void)cpu; (void)reg; return 0;
+}
+void gte_write_data(CPUState *cpu, uint8_t reg, uint32_t val) {
+    (void)cpu; (void)reg; (void)val;
+}
+void gte_write_ctrl(CPUState *cpu, uint8_t reg, uint32_t val) {
+    (void)cpu; (void)reg; (void)val;
+}
+int32_t psx_ws_plane_nx(int32_t nx) { return nx; }
+uint32_t psx_ws_xclip_bound(uint32_t vanilla) { return vanilla; }
+void gte_precision_store_word(uint32_t addr, uint8_t reg) {
+    (void)addr; (void)reg;
+}
+void gte_precision_speculative_begin(void) {}
+void gte_precision_speculative_end(void) {}
+int gte_replay_side_effects_begin(void) { return 1; }
+void gte_replay_side_effects_end(void) {}
+
+int ls_shadow_record_begin(void) { return 1; }
+int ls_shadow_record_end(uint32_t *ops, int *exc) {
+    if (ops) *ops = 0;
+    if (exc) *exc = 0;
+    return 1;
+}
+int ls_shadow_replay_begin(void) { return 1; }
+int ls_shadow_replay_end(uint32_t *ops, int *kind, uint32_t *pc,
+                         uint32_t *addr, uint32_t *expected,
+                         uint32_t *actual) {
+    (void)ops; (void)kind; (void)pc; (void)addr; (void)expected; (void)actual;
+    return 1;
+}
+void ls_shadow_abort(void) {}
+
+int psx_ws_backdrop_x(int x) { return x; }
+int psx_ws_x_margin(void) { return 0; }
+void psx_ws_sprite_tag(CPUState *cpu) { (void)cpu; }
+uint32_t psx_ws_backdrop_value(uint32_t orig, int end, int cols) {
+    (void)end; (void)cols; return orig;
+}
+int32_t psx_ws_depth_bound(int32_t imm) { return imm; }
+int32_t psx_ws_player_x_bound(int32_t vanilla) { return vanilla; }
+int psx_ws_masked_reject(uint32_t flags, uint32_t mask) { return (flags & mask) != 0; }
+int psx_ws_nclip_branch(uint32_t pc, uint32_t instr, int32_t mac0, int vanilla) {
+    (void)pc; (void)instr; (void)mac0; return vanilla;
+}
+int32_t psx_ws_screen_x_bound(int32_t vanilla) { return vanilla; }
+int psx_mod_function_entry(CPUState *cpu, uint32_t address) {
+    (void)cpu; (void)address;
+    return 0;
+}
+void psx_mod_instruction(CPUState *cpu, uint32_t address, uint32_t instruction) {
+    (void)cpu; (void)address; (void)instruction;
+}
+int psx_netplay_is_resimulating(void) { return 0; }
+int psx_game_text_native_ok(uint32_t address) { (void)address; return 1; }
+uint32_t psx_ws_angle_widen(uint32_t vanilla) { return vanilla; }
+int32_t psx_ws_cull_scale(int32_t bound, int32_t half_extent) {
+    (void)half_extent; return bound;
+}
+int32_t gte_nclip_exact_sign(int32_t native_mac0, uint32_t pc) {
+    (void)pc;
+    return native_mac0 < 0 ? -1 : (native_mac0 > 0 ? 1 : 0);
+}
+uint32_t psx_ws_cull_keep_result(uint32_t vanilla, uint32_t forced) {
+    (void)forced; return vanilla;
+}
+uint32_t psx_ws_aspect_cone_result(uint32_t site, uint32_t vanilla,
+                                  uint32_t object, int32_t x, int32_t z, int32_t y) {
+    (void)site; (void)object; (void)x; (void)z; (void)y; return vanilla;
+}
+/* This harness exercises loader ownership, not precision shadowing. */
+void psx_pgxp_load(CPUState *cpu, uint32_t i, uint32_t a, uint32_t v) {
+    (void)cpu; (void)i; (void)a; (void)v;
+}
+void psx_pgxp_store(CPUState *cpu, uint32_t i, uint32_t a, uint32_t v) {
+    (void)cpu; (void)i; (void)a; (void)v;
+}
+void psx_pgxp_alu(CPUState *cpu, uint32_t i, uint32_t r, uint32_t s, uint32_t t) {
+    (void)cpu; (void)i; (void)r; (void)s; (void)t;
+}
+void psx_pgxp_muldiv(CPUState *cpu, uint32_t i, uint32_t h, uint32_t l, uint32_t s, uint32_t t) {
+    (void)cpu; (void)i; (void)h; (void)l; (void)s; (void)t;
+}
+void psx_pgxp_cop2(CPUState *cpu, uint32_t i, uint32_t v, uint32_t a) {
+    (void)cpu; (void)i; (void)v; (void)a;
+}
+
+typedef int (*CounterFn)(void);
+
+#ifdef _WIN32
+typedef HMODULE TestModule;
+static int module_is_loaded(const char *path) {
+    return GetModuleHandleA(path) != NULL;
+}
+static TestModule module_open(const char *path) { return LoadLibraryA(path); }
+static CounterFn module_counter(TestModule module, const char *name) {
+    return (CounterFn)GetProcAddress(module, name);
+}
+static void module_close(TestModule module) { if (module) FreeLibrary(module); }
+#else
+typedef void *TestModule;
+static int module_is_loaded(const char *path) {
+#ifndef RTLD_NOLOAD
+#error "pair-dedup handle ownership test requires RTLD_NOLOAD"
+#else
+    void *module = dlopen(path, RTLD_NOW | RTLD_NOLOAD);
+    if (!module) return 0;
+    dlclose(module);
+    return 1;
+#endif
+}
+static TestModule module_open(const char *path) {
+    return dlopen(path, RTLD_NOW | RTLD_LOCAL);
+}
+static CounterFn module_counter(TestModule module, const char *name) {
+    return (CounterFn)dlsym(module, name);
+}
+static void module_close(TestModule module) { if (module) dlclose(module); }
+#endif
+
+static int counter_value(const char *path, const char *name) {
+    TestModule module = module_open(path);
+    if (!module) return -1000;
+    CounterFn counter = module_counter(module, name);
+    int value = counter ? counter() : -1001;
+    module_close(module);
+    return value;
+}
+
+static int expect_int(const char *what, long long actual, long long expected) {
+    if (actual == expected) return 1;
+    fprintf(stderr, "%s: got %lld, expected %lld\n", what, actual, expected);
+    return 0;
+}
+
+static uint32_t loader_owner_count(void) {
+    uint32_t loads = 0;
+    overlay_loader_get_counters(&loads, NULL, NULL, NULL, NULL, NULL,
+                                NULL, NULL, NULL, NULL, NULL);
+    return loads;
+}
+
+static int replace_suffix(char *out, size_t cap, const char *path,
+                          const char *suffix) {
+    size_t path_len = strlen(path);
+#ifdef _WIN32
+    const char *extension = ".dll";
+#else
+    const char *extension = ".so";
+#endif
+    size_t extension_len = strlen(extension);
+    if (path_len < extension_len ||
+        strcmp(path + path_len - extension_len, extension) != 0)
+        return 0;
+    int written = snprintf(out, cap, "%.*s%s",
+                           (int)(path_len - extension_len), path, suffix);
+    return written > 0 && (size_t)written < cap;
+}
+
+static int reveal_second_pair(const char *second) {
+    char pending[1024], ranges[1024], ranges_pending[1024];
+    char resident[1024], resident_pending[1024];
+    int pending_n = snprintf(pending, sizeof(pending), "%s.pending", second);
+    if (pending_n <= 0 || (size_t)pending_n >= sizeof(pending) ||
+        !replace_suffix(ranges, sizeof(ranges), second, ".ranges") ||
+        !replace_suffix(resident, sizeof(resident), second, ".resident"))
+        return 0;
+    int ranges_n = snprintf(ranges_pending, sizeof(ranges_pending),
+                            "%s.pending", ranges);
+    int resident_n = snprintf(resident_pending, sizeof(resident_pending),
+                              "%s.pending", resident);
+    if (ranges_n <= 0 || (size_t)ranges_n >= sizeof(ranges_pending) ||
+        resident_n <= 0 || (size_t)resident_n >= sizeof(resident_pending))
+        return 0;
+    /* Reveal metadata first and the DLL last, matching transactional publication. */
+    if (rename(ranges_pending, ranges) != 0 ||
+        rename(resident_pending, resident) != 0 ||
+        rename(pending, second) != 0) {
+        perror("reveal staged pair");
+        return 0;
+    }
+    return 1;
+}
+
+/* A shard compiled for KSEG0 runs only for KSEG0 PCs. The same bytes reached
+ * through KUSEG or KSEG1 are a different architectural PC ($ra, EPC, I-cache
+ * tag), so those dispatches must fall to the interpreter without touching the
+ * shard (overlay_loader.h, PSX_OVERLAY_CODE_SEGMENT). */
+static int segment_alias(const char *first) {
+    CPUState cpu;
+    int ok = 1;
+    ok &= expect_int("registered", overlay_loader_registered_count(), 2);
+    static const uint32_t aliases[] = { 0x00010000u, 0xA0010000u };
+    for (unsigned i = 0; i < sizeof(aliases) / sizeof(aliases[0]); i++) {
+        memset(&cpu, 0, sizeof(cpu));
+        ok &= expect_int("alias dispatch",
+                         overlay_loader_dispatch(&cpu, aliases[i]), 0);
+        ok &= expect_int("alias left registers", cpu.gpr[2], 0);
+    }
+    ok &= expect_int("alias calls", counter_value(first, "test_call_count"), 0);
+    ok &= expect_int("alias counter",
+                     (long long)overlay_loader_segment_alias_interp(), 2);
+    memset(&cpu, 0, sizeof(cpu));
+    ok &= expect_int("kseg0 dispatch",
+                     overlay_loader_dispatch(&cpu, 0x80010000u), 1);
+    ok &= expect_int("kseg0 marker", cpu.gpr[2], TEST_MARKER);
+    ok &= expect_int("kseg0 calls", counter_value(first, "test_call_count"), 1);
+    ok &= expect_int("kseg0 counter",
+                     (long long)overlay_loader_segment_alias_interp(), 2);
+    if (!ok) {
+        fprintf(stderr, "loader: %s\n", overlay_loader_last_msg());
+        return 1;
+    }
+    printf("PASS segment-alias\n");
+    return 0;
+}
+
+/* Per-segment shards (docs/SEGMENT_AWARE_CODE.md §5.7). The fixture is built
+ * once per segment (instance 1 KSEG0, 3 KUSEG, 4 KSEG1), each with one
+ * function at physical 0x10000 whose manifest range covers 0x10000-0x10007,
+ * so 0x10004 is a CPS continuation inside it. Each PC runs only the shard of
+ * its own segment, entry or continuation alike; a PC with no shard of its
+ * segment, or in a segment that maps no RAM, is interpreted. */
+struct SegCase { uint32_t pc; int ran; int instance; };
+
+static int segment_dispatch(const struct SegCase *cases, unsigned n) {
+    int ok = 1;
+    for (unsigned i = 0; i < n; i++) {
+        CPUState cpu;
+        char what[64];
+        memset(&cpu, 0, sizeof(cpu));
+        int ran = overlay_loader_dispatch(&cpu, cases[i].pc);
+        snprintf(what, sizeof(what), "dispatch 0x%08X ran", cases[i].pc);
+        ok &= expect_int(what, ran, cases[i].ran);
+        snprintf(what, sizeof(what), "dispatch 0x%08X shard", cases[i].pc);
+        ok &= expect_int(what, cpu.gpr[6], cases[i].ran ? cases[i].instance : 0);
+        if (cases[i].ran) {
+            /* A continuation re-enters its owner with cpu->pc = the PC. */
+            snprintf(what, sizeof(what), "dispatch 0x%08X entry pc", cases[i].pc);
+            ok &= expect_int(what, cpu.gpr[7],
+                             (cases[i].pc & 0x1FFFFFFFu) == 0x10000u ? 0 : cases[i].pc);
+        }
+    }
+    return ok;
+}
+
+extern int overlay_loader_call_native(CPUState *cpu, uint32_t addr);
+
+static int segment_shards(int kseg0, int kuseg, int kseg1, const char *publish) {
+    extern int g_psx_cps_mode;
+    g_psx_cps_mode = 1;
+    const struct SegCase cases[] = {
+        { 0x00010000u, kuseg, 3 }, { 0x80010000u, kseg0, 1 },
+        { 0xA0010000u, kseg1, 4 },
+        { 0x00010004u, kuseg, 3 }, { 0x80010004u, kseg0, 1 },
+        { 0xA0010004u, kseg1, 4 },
+        /* No RAM there in Beetle (addr_mask leaves them unmasked). */
+        { 0x20010000u, 0, 0 }, { 0xC0010000u, 0, 0 },
+    };
+    int ok = segment_dispatch(cases, sizeof(cases) / sizeof(cases[0]));
+    /* Again, now that every shard is loaded and cached: same answers. */
+    ok &= segment_dispatch(cases, sizeof(cases) / sizeof(cases[0]));
+    long long native = 2 * (2 * kuseg + 2 * kseg1);
+    long long interp = 2 * (2 * !kuseg + 2 * !kseg1 + 2);
+    ok &= expect_int("segment_native", (long long)overlay_loader_segment_native(),
+                     native);
+    ok &= expect_int("segment_alias_interp",
+                     (long long)overlay_loader_segment_alias_interp(), interp);
+    ok &= expect_int("registered", overlay_loader_registered_count(),
+                     kseg0 + kuseg + kseg1);
+    ok &= expect_int("pair aliases", (long long)overlay_loader_pair_aliases(), 0);
+    /* Only manifests whose segment agrees with their directory are indexed. */
+    ok &= expect_int("lazy manifests", overlay_loader_lazy_manifest_count(),
+                     kseg0 + kuseg + kseg1);
+    /* The interpreter's native-call contract asks the loader only for a PC
+     * with a shard of its own segment: no dispatch, no count, for the rest. */
+    static const uint32_t segs[] = { 0x00000000u, 0xA0000000u };
+    const int have[] = { kuseg, kseg1 };
+    for (unsigned i = 0; i < 2; i++) {
+        CPUState cpu;
+        memset(&cpu, 0, sizeof(cpu));
+        uint64_t n0 = overlay_loader_segment_native();
+        uint64_t i0 = overlay_loader_segment_alias_interp();
+        char what[64];
+        snprintf(what, sizeof(what), "call_native 0x%08X", segs[i] | 0x10000u);
+        ok &= expect_int(what, overlay_loader_call_native(&cpu, segs[i] | 0x10000u),
+                         have[i]);
+        ok &= expect_int("call_native segment_native",
+                         (long long)(overlay_loader_segment_native() - n0), have[i]);
+        ok &= expect_int("call_native segment_alias_interp",
+                         (long long)(overlay_loader_segment_alias_interp() - i0), 0);
+    }
+    /* A refused pair stays refused through live publication. */
+    if (publish && strcmp(publish, "-") != 0) {
+        OverlayPreparedImage *image = overlay_loader_prepare_published(publish);
+        int published = image ? overlay_loader_commit_published(image) : 0;
+        ok &= expect_int("published refused pair", published, 0);
+        ok &= expect_int("registered after publication",
+                         overlay_loader_registered_count(), kseg0 + kuseg + kseg1);
+    }
+    if (!ok) {
+        fprintf(stderr, "loader: %s\n", overlay_loader_last_msg());
+        return 1;
+    }
+    printf("PASS segment-shards kseg0=%d kuseg=%d kseg1=%d\n", kseg0, kuseg, kseg1);
+    return 0;
+}
+
+/* segment-stale: the KUSEG shard's bytes no longer match live RAM, the KSEG0
+ * shard's do. The KUSEG PC is interpreted, never handed to the KSEG0 shard
+ * that follows it in the physical chain. */
+static int segment_stale(void) {
+    const struct SegCase cases[] = {
+        { 0x00010000u, 0, 0 }, { 0x80010000u, 1, 1 }, { 0xA0010000u, 0, 0 },
+    };
+    /* Both are loaded; only the KSEG0 candidate validates. */
+    int ok = expect_int("valid candidates", overlay_loader_registered_count(), 1);
+    ok &= segment_dispatch(cases, sizeof(cases) / sizeof(cases[0]));
+    if (!ok) { fprintf(stderr, "loader: %s\n", overlay_loader_last_msg()); return 1; }
+    printf("PASS segment-stale\n");
+    return 0;
+}
+
+/* segment-continuation: a KSEG0 shard has a function ENTRY at 0x10004, and
+ * the KUSEG shard owns 0x10004 as a CPS continuation of its 0x10000
+ * function. The KUSEG PC resumes the KUSEG owner; another segment's entry at
+ * the word is not an entry for it. With `lazy`, both shards are unloaded and
+ * the KSEG0 one is newer: the continuation still loads the KUSEG shard. */
+static int segment_continuation(int lazy) {
+    extern int g_psx_cps_mode;
+    g_psx_cps_mode = 1;
+    CPUState cpu;
+    int ok = 1;
+    memset(&cpu, 0, sizeof(cpu));
+    ok &= expect_int("kuseg continuation ran", overlay_loader_dispatch(&cpu, 0x00010004u), 1);
+    ok &= expect_int("kuseg continuation shard", cpu.gpr[6], 3);
+    ok &= expect_int("kuseg continuation pc", cpu.gpr[7], 0x00010004u);
+    if (!lazy) {
+        memset(&cpu, 0, sizeof(cpu));
+        ok &= expect_int("kseg0 entry ran", overlay_loader_dispatch(&cpu, 0x80010004u), 1);
+        ok &= expect_int("kseg0 entry marker", cpu.gpr[3], TEST_MARKER);
+        ok &= expect_int("kseg0 entry is no kuseg shard", cpu.gpr[6], 0);
+    }
+    if (!ok) { fprintf(stderr, "loader: %s\n", overlay_loader_last_msg()); return 1; }
+    printf("PASS segment-continuation%s\n", lazy ? " (lazy)" : "");
+    return 0;
+}
+
+/* segment-run: real shards compiled by compile_overlays.py from one image,
+ * one per segment it was captured in (docs/SEGMENT_AWARE_CODE.md §5.7). The
+ * image is placed at its physical address and entered at `phys` in each
+ * segment, driving a minimal CPS dispatch loop (each tail transfer goes back
+ * through overlay_loader_dispatch) until the function returns to its caller.
+ * One line per segment reports what the shards did; the Python side judges
+ * it: the links, fetch tags and store-PC stamps each run produced, and
+ * whether every transfer ran natively. */
+static uint32_t s_store_log[64];
+static unsigned s_store_n;
+/* The host store-PC stamp the shards write through (ABI v24). This harness
+ * builds the loader with PSX_OVERLAY_DLL_BUILD, where cpu_state.h maps
+ * g_debug_last_store_pc onto *g_psx_last_store_pc_p, so point that at a
+ * real word before the loader hands its address to the shards. */
+static uint32_t s_host_store_pc;
+static uint32_t ram_read_word(uint32_t addr) {
+    uint32_t v;
+    memcpy(&v, &s_ram[(addr & (RAM_SIZE - 1u)) & ~3u], 4);
+    return v;
+}
+static void ram_write_word(uint32_t addr, uint32_t value) {
+    if (s_store_n < sizeof(s_store_log) / sizeof(s_store_log[0]))
+        s_store_log[s_store_n++] = s_host_store_pc;
+    memcpy(&s_ram[(addr & (RAM_SIZE - 1u)) & ~3u], &value, 4);
+}
+
+static int segment_run(const char *image_path, const char *phys_text) {
+    extern int g_psx_cps_mode;
+    const uint32_t ra_sentinel = 0x0000BEE0u;
+    uint32_t phys = (uint32_t)strtoul(phys_text, NULL, 16);
+    FILE *f = fopen(image_path, "rb");
+    if (!f) { perror(image_path); return 3; }
+    size_t got = fread(&s_ram[phys], 1, RAM_SIZE - phys, f);
+    fclose(f);
+    if (got == 0) return 3;
+    g_psx_cps_mode = 1;
+    static const uint32_t segs[] = { 0x00000000u, 0x80000000u, 0xA0000000u };
+    for (unsigned si = 0; si < 3; si++) {
+        CPUState cpu;
+        memset(&cpu, 0, sizeof(cpu));
+        cpu.read_word = ram_read_word;
+        cpu.write_word = ram_write_word;
+        cpu.gpr[29] = 0x001FF000u;
+        cpu.gpr[31] = ra_sentinel;
+        s_fetch_n = 0;
+        s_store_n = 0;
+        uint32_t pc = segs[si] | phys, interp_at = 0;
+        unsigned steps = 0, native = 0;
+        while (pc != ra_sentinel && steps++ < 64) {
+            cpu.pc = 0;
+            if (!overlay_loader_dispatch(&cpu, pc)) { interp_at = pc; break; }
+            native++;
+            if (cpu.pc == 0) break;          /* returned to the C caller */
+            pc = cpu.pc;
+        }
+        printf("seg=%08X native=%u interp_at=%08X end=%08X v1=%08X t3=%u sp=%08X "
+               "fetch=", segs[si], native, interp_at, pc, cpu.gpr[3],
+               cpu.gpr[11], cpu.gpr[29]);
+        for (unsigned i = 0; i < s_fetch_n; i++)
+            printf("%s%08X", i ? "," : "", s_fetch_log[i]);
+        printf(" store_pc=");
+        for (unsigned i = 0; i < s_store_n; i++)
+            printf("%s%08X", i ? "," : "", s_store_log[i]);
+        printf("\n");
+    }
+    printf("segment_native=%llu segment_alias_interp=%llu registered=%d\n",
+           (unsigned long long)overlay_loader_segment_native(),
+           (unsigned long long)overlay_loader_segment_alias_interp(),
+           overlay_loader_registered_count());
+    return 0;
+}
+
+int main(int argc, char **argv) {
+    if (argc != 5) {
+        fprintf(stderr, "usage: %s <cache-root> <scenario> <first> <second>\n",
+                argv[0]);
+        return 2;
+    }
+    const char *scenario = argv[2];
+    const char *first = argv[3];
+    const char *second = argv[4];
+    memset(s_ram, 0, sizeof(s_ram));
+    g_psx_last_store_pc_p = &s_host_store_pc;
+    overlay_loader_init(argv[1], "PAIR-TEST", 0);
+    if (strcmp(scenario, "segment-alias") == 0) return segment_alias(first);
+    /* segment-shards: argv[3] names which segments have a shard ("kseg0",
+     * "kuseg", "kseg1", comma-separated, or "none"). */
+    if (strcmp(scenario, "segment-shards") == 0)
+        return segment_shards(strstr(first, "kseg0") != NULL,
+                              strstr(first, "kuseg") != NULL,
+                              strstr(first, "kseg1") != NULL, second);
+    if (strcmp(scenario, "segment-stale") == 0) return segment_stale();
+    if (strcmp(scenario, "segment-continuation") == 0)
+        return segment_continuation(strcmp(first, "lazy") == 0);
+    /* segment-run <image> <phys-hex> */
+    if (strcmp(scenario, "segment-run") == 0) return segment_run(first, second);
+
+    int alias = strcmp(scenario, "alias-at-cap") == 0;
+    int partial = strcmp(scenario, "partial-first") == 0;
+    int ok = 1;
+
+    /* Only the first physical pair exists at init. This pins canonical order,
+     * then makes rescan responsible for discovering the staged second pair. */
+    ok &= expect_int("pre-rescan registered", overlay_loader_registered_count(),
+                     partial ? 0 : (alias ? 4 : 2));
+    ok &= expect_int("pre-rescan aliases",
+                     (long long)overlay_loader_pair_aliases(), 0);
+    ok &= expect_int("pre-rescan owners", loader_owner_count(), partial ? 0 : 1);
+    ok &= expect_int("pre-rescan first init",
+                     counter_value(first, "test_init_count"), partial ? 0 : 1);
+    ok &= expect_int("pre-rescan first retained", module_is_loaded(first),
+                     partial ? 0 : 1);
+    if (!reveal_second_pair(second)) return 3;
+    overlay_loader_rescan();
+
+    ok &= expect_int("registered", overlay_loader_registered_count(),
+                     alias ? 4 : (partial ? 2 : 4));
+    ok &= expect_int("pair aliases", (long long)overlay_loader_pair_aliases(),
+                     alias ? 1 : 0);
+    ok &= expect_int("candidate overflow",
+                     (long long)overlay_loader_candidate_overflow(), 0);
+    ok &= expect_int("loader owners", loader_owner_count(),
+                     alias || partial ? 1 : 2);
+    ok &= expect_int("first init", counter_value(first, "test_init_count"),
+                     partial ? 0 : 1);
+    ok &= expect_int("second init", counter_value(second, "test_init_count"),
+                     alias ? 0 : 1);
+
+    int first_loaded = module_is_loaded(first);
+    int second_loaded = module_is_loaded(second);
+    ok &= expect_int("first retained", first_loaded, partial ? 0 : 1);
+    ok &= expect_int("second retained", second_loaded, alias ? 0 : 1);
+
+    if (alias) {
+        CPUState cpu;
+        memset(&cpu, 0, sizeof(cpu));
+        ok &= expect_int("canonical dispatch",
+                         overlay_loader_dispatch(&cpu, 0x80010000u), 1);
+        ok &= expect_int("canonical marker", cpu.gpr[2], TEST_MARKER);
+        ok &= expect_int("canonical call count",
+                         counter_value(first, "test_call_count"), 1);
+        ok &= expect_int("redundant call count",
+                         counter_value(second, "test_call_count"), 0);
+        ok &= expect_int("canonical flush count",
+                         counter_value(first, "test_flush_count"), 1);
+        ok &= expect_int("redundant flush count",
+                         counter_value(second, "test_flush_count"), 0);
+    }
+
+    /* A second rescan must neither reacquire an alias handle nor publish
+     * another owner/candidate set for an already satisfied physical path. */
+    overlay_loader_rescan();
+    ok &= expect_int("idempotent registered", overlay_loader_registered_count(),
+                     alias ? 4 : (partial ? 2 : 4));
+    ok &= expect_int("idempotent aliases",
+                     (long long)overlay_loader_pair_aliases(), alias ? 1 : 0);
+    ok &= expect_int("idempotent owners", loader_owner_count(),
+                     alias || partial ? 1 : 2);
+
+    if (!ok) {
+        fprintf(stderr, "loader: %s; lazy=%d overflow=%d\n",
+                overlay_loader_last_msg(), overlay_loader_lazy_manifest_count(),
+                overlay_loader_lazy_manifest_overflow());
+        return 1;
+    }
+    printf("PASS %s registered=%d aliases=%llu\n", scenario,
+           overlay_loader_registered_count(),
+           (unsigned long long)overlay_loader_pair_aliases());
+    return 0;
+}

@@ -1,0 +1,1371 @@
+cmake_minimum_required(VERSION 3.20)
+project(PSXRecomp C CXX)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+include(CTest)
+
+# libchdr is needed by exactly one target here: the user-facing `psxrecomp`
+# media CLI. It arrives via FetchContent + ExternalProject, which is by far the
+# heaviest and most fragile thing in this configure — it needs the network on a
+# cold cache, and ExternalProject cannot handle a source path containing a colon
+# (a repo directory like "Marvel vs. Capcom: Clash of Super Heroes Recomp"
+# truncates to "…/Marvel vs. Capcom.rule" and configure dies).
+#
+# Turning it off lets a caller that only wants an analysis or emitter binary
+# configure this project without any of that. Nothing but the media CLI is
+# affected; the emitters, psxrecomp-analyze, and every test are chd-free.
+option(PSXRECOMP_ENABLE_CHD
+       "Build the psxrecomp media CLI (requires libchdr via FetchContent)" ON)
+
+if(PSXRECOMP_ENABLE_CHD)
+    # The Python disc tools (psxrecomp_cli.py verify-disc, tools/prepare_disc.py,
+    # tools/new_project_layout/probe_disc.py) read .chd through this same
+    # decoder via ctypes, so libchdr is also built as a shared library, placed
+    # next to the emitters where tools/psx_chd.py looks for it. BUILD_SHARED_LIBS
+    # is scoped to that include: libchdr's codecs are declared STATIC and
+    # chdr-static (what psxrecomp links) is unaffected; nothing else in this
+    # project turns shared.
+    set(_psx_saved_build_shared "${BUILD_SHARED_LIBS}")
+    set(BUILD_SHARED_LIBS ON)
+    include("${CMAKE_CURRENT_SOURCE_DIR}/../runtime/chd_dependency.cmake")
+    set(BUILD_SHARED_LIBS "${_psx_saved_build_shared}")
+    unset(_psx_saved_build_shared)
+    if(TARGET chdr)
+        set_target_properties(chdr PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+            LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+    endif()
+endif()
+
+add_subdirectory(lib/fmt)
+
+# Vendored fmt 9.1.0 enables its `consteval` format-string check on Apple
+# clang via the `__cpp_consteval` clause in core.h, even though the same
+# block tries to exclude Apple toolchains — and Apple clang 21 then rejects
+# fmt's own literal format strings ("call to consteval function is not a
+# constant expression"). Force FMT_CONSTEVAL empty to take fmt's
+# non-consteval compile-time-check path. Scoped to non-MSVC so Windows is
+# untouched.
+if(NOT MSVC)
+    target_compile_definitions(fmt PUBLIC FMT_CONSTEVAL=)
+endif()
+
+# Rabbitizer MIPS decoder
+add_library(rabbitizer STATIC)
+target_sources(rabbitizer PRIVATE
+    lib/rabbitizer/cplusplus/src/analysis/LoPairingInfo.cpp
+    lib/rabbitizer/cplusplus/src/analysis/RegistersTracker.cpp
+    lib/rabbitizer/cplusplus/src/instructions/InstrId.cpp
+    lib/rabbitizer/cplusplus/src/instructions/InstrIdType.cpp
+    lib/rabbitizer/cplusplus/src/instructions/InstructionBase.cpp
+    lib/rabbitizer/cplusplus/src/instructions/InstructionCpu.cpp
+    lib/rabbitizer/cplusplus/src/instructions/InstructionR3000GTE.cpp
+    lib/rabbitizer/cplusplus/src/instructions/InstructionR5900.cpp
+    lib/rabbitizer/cplusplus/src/instructions/InstructionRsp.cpp
+    lib/rabbitizer/src/analysis/RabbitizerLoPairingInfo.c
+    lib/rabbitizer/src/analysis/RabbitizerRegistersTracker.c
+    lib/rabbitizer/src/analysis/RabbitizerTrackedRegisterState.c
+    lib/rabbitizer/src/common/RabbitizerConfig.c
+    lib/rabbitizer/src/common/RabbitizerVersion.c
+    lib/rabbitizer/src/common/Utils.c
+    lib/rabbitizer/src/instructions/RabbitizerInstrCategory.c
+    lib/rabbitizer/src/instructions/RabbitizerInstrDescriptor.c
+    lib/rabbitizer/src/instructions/RabbitizerInstrId.c
+    lib/rabbitizer/src/instructions/RabbitizerInstrIdType.c
+    lib/rabbitizer/src/instructions/RabbitizerInstrSuffix.c
+    lib/rabbitizer/src/instructions/RabbitizerInstructionCpu/RabbitizerInstructionCpu_OperandType.c
+    lib/rabbitizer/src/instructions/RabbitizerInstructionR3000GTE/RabbitizerInstructionR3000GTE.c
+    lib/rabbitizer/src/instructions/RabbitizerInstructionR3000GTE/RabbitizerInstructionR3000GTE_OperandType.c
+    lib/rabbitizer/src/instructions/RabbitizerInstructionR3000GTE/RabbitizerInstructionR3000GTE_ProcessUniqueId.c
+    lib/rabbitizer/src/instructions/RabbitizerInstructionR5900/RabbitizerInstructionR5900.c
+    lib/rabbitizer/src/instructions/RabbitizerInstructionR5900/RabbitizerInstructionR5900_OperandType.c
+    lib/rabbitizer/src/instructions/RabbitizerInstructionR5900/RabbitizerInstructionR5900_ProcessUniqueId.c
+    lib/rabbitizer/src/instructions/RabbitizerInstructionRsp/RabbitizerInstructionRsp.c
+    lib/rabbitizer/src/instructions/RabbitizerInstructionRsp/RabbitizerInstructionRsp_OperandType.c
+    lib/rabbitizer/src/instructions/RabbitizerInstructionRsp/RabbitizerInstructionRsp_ProcessUniqueId.c
+    lib/rabbitizer/src/instructions/RabbitizerInstruction/RabbitizerInstruction.c
+    lib/rabbitizer/src/instructions/RabbitizerInstruction/RabbitizerInstruction_Disassemble.c
+    lib/rabbitizer/src/instructions/RabbitizerInstruction/RabbitizerInstruction_Examination.c
+    lib/rabbitizer/src/instructions/RabbitizerInstruction/RabbitizerInstruction_Operand.c
+    lib/rabbitizer/src/instructions/RabbitizerInstruction/RabbitizerInstruction_ProcessUniqueId.c
+    lib/rabbitizer/src/instructions/RabbitizerRegister.c
+    lib/rabbitizer/src/instructions/RabbitizerRegisterDescriptor.c
+)
+target_include_directories(rabbitizer PRIVATE
+    lib/rabbitizer/include
+    lib/rabbitizer/cplusplus/include
+    lib/rabbitizer/tables
+)
+
+# PSXRecomp — MIPS→C recompiler tool
+set(PSXRECOMP_GAME_SOURCES
+    src/ps1_exe_parser.cpp
+    src/mips_decoder.cpp
+    src/control_flow.cpp
+    src/function_analysis.cpp
+    src/code_generator.cpp
+    src/pgxp_hook_emitter.cpp
+    src/bios_address_model.cpp
+    src/annotations.cpp
+    src/config_loader.cpp
+    src/recompiler_patch.cpp
+    src/game_dispatch_emitter.cpp
+    src/segment_variants.cpp
+    src/main_psx.cpp
+)
+
+add_executable(psxrecomp-game ${PSXRECOMP_GAME_SOURCES})
+target_include_directories(psxrecomp-game PRIVATE
+    include
+    lib/rabbitizer/include
+    lib/rabbitizer/cplusplus/include
+    lib/fmt/include
+    lib/toml11
+    lib/ELFIO
+)
+target_link_libraries(psxrecomp-game PRIVATE fmt rabbitizer)
+if(MINGW)
+    target_link_options(psxrecomp-game PRIVATE -Wl,--stack,16777216)
+elseif(MSVC)
+    target_link_options(psxrecomp-game PRIVATE /STACK:16777216)
+endif()
+
+# psxrecomp-toml — PS-X EXE → game.toml generator.
+# Standalone tool that analyses a PS-X EXE and generates a complete game.toml
+# config with auto-detected fields (load_address, entry_pc, text_size,
+# stack_base) and optional JAL-target seed generation.
+add_executable(psxrecomp-toml
+    src/ps1_exe_parser.cpp
+    src/main_toml.cpp
+)
+target_include_directories(psxrecomp-toml PRIVATE
+    include
+    lib/fmt/include
+)
+target_link_libraries(psxrecomp-toml PRIVATE fmt)
+
+# psxrecomp — user-facing media-to-source project generator.
+# The only libchdr consumer in this project; see PSXRECOMP_ENABLE_CHD above.
+if(PSXRECOMP_ENABLE_CHD)
+    add_executable(psxrecomp
+        src/main_cli.cpp
+        src/cli_boot_path.cpp
+        src/ps1_exe_parser.cpp
+        ../runtime/src/cue_sheet.cpp
+        ../runtime/src/iso_reader.cpp
+    )
+    target_include_directories(psxrecomp PRIVATE
+        include
+        ../runtime/include
+        lib/fmt/include
+    )
+    target_link_libraries(psxrecomp PRIVATE fmt chdr-static)
+    if(MINGW)
+        target_link_options(psxrecomp PRIVATE -Wl,--stack,16777216)
+    elseif(MSVC)
+        target_link_options(psxrecomp PRIVATE /STACK:16777216)
+    endif()
+endif()
+
+# psxrecomp-analyze — developer-facing static function discovery.
+#
+# NOT part of the recompilation path. It turns the boundary/CFG/jump-table
+# knowledge the emitters already derive into a queryable artifact set for
+# modding and decomp work (see docs/FUNCTION_DISCOVERY.md).
+#
+# The source list is the guarantee: no runtime/ translation unit appears here
+# and none may be added. The tool's whole claim is that everything it reports
+# was proven from the executable image alone, with no trace, overlay-capture,
+# or executed-PC feedback. Linking the runtime would quietly make that false.
+add_executable(psxrecomp-analyze
+    src/ps1_exe_parser.cpp
+    src/mips_decoder.cpp
+    src/function_analysis.cpp
+    src/analysis_db.cpp
+    src/bios_call_names.cpp
+    src/analysis_export.cpp
+    src/widescreen_scan.cpp
+    src/main_analyze.cpp
+)
+target_include_directories(psxrecomp-analyze PRIVATE
+    include
+    src
+    ../runtime/include   # ws_cull_detect.h — the shared auto_screen_x detector
+    lib/fmt/include
+    lib/toml11
+)
+target_link_libraries(psxrecomp-analyze PRIVATE fmt)
+if(MINGW)
+    target_link_options(psxrecomp-analyze PRIVATE -Wl,--stack,16777216)
+elseif(MSVC)
+    target_link_options(psxrecomp-analyze PRIVATE /STACK:16777216)
+endif()
+
+# ---- baked codegen hash (stale-binary guard) --------------------------------
+# Bake the SAME emitter-source hash the runtime folds into its overlay cache
+# tag (runtime/runtime.cmake -> hash_codegen.cmake, shared canonical list in
+# runtime/codegen_hash_sources.cmake) into THIS binary, exposed via
+# `psxrecomp-game --codegen-hash`. compile_overlays.py compares it against the
+# hash it stamps on the cache dir (from --runtime-include) and HARD-FAILS on
+# mismatch. Closes the 2026-07-01 Tomba pause-menu wedge class: a stale
+# recompiler binary emitting shards that get filed under the CURRENT cg tag
+# (read tag == write tag, content stale — invisible to the tag alone).
+set(PSXRECOMP_CODEGEN_HASH_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
+include(${CMAKE_CURRENT_SOURCE_DIR}/../runtime/codegen_hash_sources.cmake)
+set(_baked_hash_hdr ${CMAKE_CURRENT_BINARY_DIR}/psxrecomp_baked_codegen_hash.h)
+add_custom_command(
+    OUTPUT  ${_baked_hash_hdr}
+    COMMAND ${CMAKE_COMMAND} -DOUT=${_baked_hash_hdr}
+            "-DSRCS=${PSXRECOMP_CODEGEN_HASH_SRCS}"
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/hash_codegen.cmake
+    DEPENDS ${PSXRECOMP_CODEGEN_HASH_SRCS}
+            ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/hash_codegen.cmake
+    COMMENT "Hashing codegen sources -> psxrecomp_baked_codegen_hash.h"
+    VERBATIM)
+add_custom_target(psxrecomp_baked_codegen_hash DEPENDS ${_baked_hash_hdr})
+add_dependencies(psxrecomp-game psxrecomp_baked_codegen_hash)
+# Force main_psx.cpp to recompile whenever the hash header content changes
+# (same OBJECT_DEPENDS hardening as runtime.cmake — __has_include depfile gap).
+set_source_files_properties(src/main_psx.cpp PROPERTIES OBJECT_DEPENDS ${_baked_hash_hdr})
+target_include_directories(psxrecomp-game PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+
+# NOTE (2026-07-27): the legacy `PSXRecomp` target was REMOVED here.
+# It built ${PSXRECOMP_GAME_SOURCES} — byte-for-byte the same source list as
+# `psxrecomp-game` above — and was a leftover from before that target was
+# introduced. Because Windows and macOS filesystems are case-insensitive, its
+# output `PSXRecomp.exe` collided with the user-facing CLI `psxrecomp.exe`
+# (the `psxrecomp` target above): both wrote the SAME file on disk and the
+# last one linked won. In practice the CLI lost, so `psxrecomp.exe` shipped in
+# `psxrecomp-cli-windows-x86_64.zip` (tools/build_cli.py) was actually the game
+# recompiler, with a completely different argument grammar than the README
+# documents. The bug is invisible on Linux, which is why it survived.
+# The `PSXRecomp.exe` users are told to run in README's "Release Package"
+# section is a DIFFERENT artifact — the BIOS-only runtime, whose name comes
+# from OUTPUT_NAME in runtime/runtime.cmake — and is unaffected by this removal.
+# See the collision guard at the bottom of this file.
+
+# psxrecomp-bios — Phase 1a BIOS boot slice recompiler.
+# Strict, fail-loud, ingests bios/SCPH1001.BIN as a flat ROM at 0xBFC00000.
+# Independent of PSXRecomp's PS1-EXE entry point. Shares mips_decoder +
+# ps1_exe_parser sources because mips_decoder.h depends on PS1Executable
+# (used only by decode_executable, which psxrecomp-bios does not call).
+add_executable(psxrecomp-bios
+    src/ps1_exe_parser.cpp
+    src/mips_decoder.cpp
+    src/strict_translator.cpp
+    src/pgxp_hook_emitter.cpp
+    src/bios_slice_walker.cpp
+    src/bios_address_model.cpp
+    src/function_discovery.cpp
+    src/full_function_emitter.cpp
+    src/config_loader.cpp
+    src/recompiler_patch.cpp
+    src/main_bios.cpp
+)
+target_include_directories(psxrecomp-bios PRIVATE
+    include
+    src
+    lib/rabbitizer/include
+    lib/rabbitizer/cplusplus/include
+    lib/fmt/include
+    lib/toml11
+)
+target_link_libraries(psxrecomp-bios PRIVATE fmt rabbitizer)
+if(MINGW)
+    target_link_options(psxrecomp-bios PRIVATE -Wl,--stack,16777216)
+elseif(MSVC)
+    target_link_options(psxrecomp-bios PRIVATE /STACK:16777216)
+endif()
+
+# Released Windows CLI archives must run without a separate MinGW/MSYS2
+# install. Prefer llvm-mingw (+ -static) in CI so emitters do not need
+# libgcc/libstdc++ harvested from MSYS2. Keep opt-in for local debug builds.
+option(PSXRECOMP_STATIC_CLI "Statically link Windows runtime into CLI tools" OFF)
+if(PSXRECOMP_STATIC_CLI AND WIN32 AND (MINGW OR CMAKE_CXX_COMPILER_ID MATCHES "Clang"))
+    set(_cli_targets psxrecomp-game psxrecomp-toml psxrecomp-bios psxrecomp-analyze)
+    if(PSXRECOMP_ENABLE_CHD)
+        list(APPEND _cli_targets psxrecomp)
+    endif()
+    if(TARGET chdr)
+        # The Python tools load this with ctypes from a plain python.exe, with
+        # no toolchain bin/ on PATH, so it must not pull libgcc or libwinpthread.
+        list(APPEND _cli_targets chdr)
+    endif()
+    foreach(_cli_target IN LISTS _cli_targets)
+        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+            target_link_options(${_cli_target} PRIVATE
+                -static -static-libgcc -static-libstdc++)
+        else()
+            # llvm-mingw / Clang: fully static CRT + libc++ / libunwind / pthread.
+            target_link_options(${_cli_target} PRIVATE -static)
+        endif()
+    endforeach()
+endif()
+
+# BIOS address-model equivalence test — sweeps every 4-byte address through
+# the profile-driven BiosAddressModel and compares against verbatim copies of
+# the pre-refactor hardcoded SCPH1001 helpers; also exercises the from_config
+# invariants. Run from the framework root: recompiler/build/bios_address_model_test
+add_executable(bios_address_model_test
+    tests/bios_address_model_test.cpp
+    src/bios_address_model.cpp
+    src/config_loader.cpp
+    src/ps1_exe_parser.cpp
+)
+target_include_directories(bios_address_model_test PRIVATE
+    include
+    src
+    lib/fmt/include
+    lib/toml11
+)
+target_link_libraries(bios_address_model_test PRIVATE fmt)
+
+# L1 decoder conformance test — compares MipsDecoder against Rabbitizer
+# oracle for every instruction in SCPH1001.BIN code regions.
+add_executable(l1_decoder_test
+    tests/l1_decoder_test.cpp
+    src/mips_decoder.cpp
+    src/ps1_exe_parser.cpp
+)
+target_include_directories(l1_decoder_test PRIVATE
+    include
+    lib/rabbitizer/include
+    lib/rabbitizer/cplusplus/include
+    lib/fmt/include
+)
+target_link_libraries(l1_decoder_test PRIVATE fmt rabbitizer)
+
+# L2 structural codegen test — verifies StrictTranslator output patterns
+# for each MIPS instruction form.
+add_executable(l2_structural_test
+    tests/l2_structural_test.cpp
+    src/mips_decoder.cpp
+    src/ps1_exe_parser.cpp
+    src/strict_translator.cpp
+    src/pgxp_hook_emitter.cpp
+)
+target_include_directories(l2_structural_test PRIVATE
+    include
+    src
+    lib/rabbitizer/include
+    lib/rabbitizer/cplusplus/include
+    lib/fmt/include
+)
+target_link_libraries(l2_structural_test PRIVATE fmt rabbitizer)
+
+# Emitter directive-line guard — pins the predicate that keeps same-line
+# appenders off preprocessor-directive lines (the PR #171 hazard class).
+add_executable(emitter_directive_line_test
+    tests/emitter_directive_line_test.cpp
+    src/pgxp_hook_emitter.cpp
+)
+target_include_directories(emitter_directive_line_test PRIVATE
+    include
+    src
+    lib/rabbitizer/include
+    lib/rabbitizer/cplusplus/include
+    lib/fmt/include
+)
+target_link_libraries(emitter_directive_line_test PRIVATE fmt rabbitizer)
+
+if(BUILD_TESTING)
+    add_executable(control_flow_metadata_test
+        tests/control_flow_metadata_test.cpp
+        src/control_flow.cpp)
+    target_include_directories(control_flow_metadata_test PRIVATE include)
+    target_link_libraries(control_flow_metadata_test PRIVATE fmt)
+    add_test(NAME control_flow_metadata_test COMMAND control_flow_metadata_test)
+    if(PSXRECOMP_ENABLE_CHD)
+        add_executable(disc_identity_test ../runtime/tests/test_disc_identity.cpp
+            ../runtime/src/disc_identity.cpp ../runtime/src/disc_path.cpp
+            ../runtime/src/iso_reader.cpp ../runtime/src/cue_sheet.cpp
+            ../runtime/src/psx_sha256.c ../runtime/src/crc32.c)
+        target_include_directories(disc_identity_test PRIVATE ../runtime/include include)
+        target_compile_options(disc_identity_test PRIVATE
+            $<$<CXX_COMPILER_ID:MSVC>:/UNDEBUG>
+            $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-UNDEBUG>)
+        target_link_libraries(disc_identity_test PRIVATE chdr-static)
+        add_test(NAME disc_identity_test COMMAND disc_identity_test)
+    endif()
+    add_executable(host_path_test tests/host_path_test.cpp)
+    target_include_directories(host_path_test PRIVATE include)
+    add_test(NAME host_path_test COMMAND host_path_test)
+
+    add_test(NAME emitter_directive_line_test
+             COMMAND emitter_directive_line_test)
+    add_executable(guest_tty_test
+        ../runtime/tests/test_guest_tty.c
+        ../runtime/src/guest_tty.c)
+    target_include_directories(guest_tty_test PRIVATE ../runtime/include)
+    add_test(NAME guest_tty_test COMMAND guest_tty_test)
+
+    add_executable(debug_trace_ranges_test
+        ../runtime/tests/test_debug_trace_ranges.c
+        ../runtime/src/debug_trace_ranges.c
+    )
+    target_include_directories(debug_trace_ranges_test PRIVATE
+        ../runtime/include)
+    add_test(NAME debug_trace_ranges_test COMMAND debug_trace_ranges_test)
+
+    add_executable(display_scanout_test
+        ../runtime/tests/test_display_scanout.c)
+    target_include_directories(display_scanout_test PRIVATE ../runtime/include)
+    add_test(NAME display_scanout_test COMMAND display_scanout_test)
+
+    # Pure header arithmetic for the OpenGL internal-resolution clamp.
+    add_executable(gl_scale_limits_test
+        ../runtime/tests/test_gl_scale_limits.c)
+    target_include_directories(gl_scale_limits_test PRIVATE ../runtime/include)
+    add_test(NAME gl_scale_limits_test COMMAND gl_scale_limits_test)
+
+    # Internal resolution presets -> integer scale (pure header).
+    add_executable(internal_resolution_test
+        ../runtime/tests/test_internal_resolution.cpp)
+    target_include_directories(internal_resolution_test PRIVATE ../runtime/include)
+    add_test(NAME internal_resolution_test COMMAND internal_resolution_test)
+
+    add_executable(cli_boot_path_test
+        tests/cli_boot_path_test.cpp
+        src/cli_boot_path.cpp
+    )
+    target_include_directories(cli_boot_path_test PRIVATE src)
+    add_test(NAME cli_boot_path_test COMMAND cli_boot_path_test)
+
+    add_executable(recompiler_patch_test
+        tests/recompiler_patch_test.cpp
+        src/ps1_exe_parser.cpp
+        src/mips_decoder.cpp
+        src/control_flow.cpp
+        src/function_analysis.cpp
+        src/code_generator.cpp
+        src/pgxp_hook_emitter.cpp
+        src/annotations.cpp
+        src/bios_address_model.cpp
+        src/config_loader.cpp
+        src/recompiler_patch.cpp
+    )
+    target_include_directories(recompiler_patch_test PRIVATE
+        include
+        src
+        lib/rabbitizer/include
+        lib/rabbitizer/cplusplus/include
+        lib/fmt/include
+        lib/toml11
+        lib/ELFIO
+    )
+    target_link_libraries(recompiler_patch_test PRIVATE fmt rabbitizer)
+    add_test(NAME recompiler_patch_test COMMAND recompiler_patch_test)
+
+    add_executable(full_function_emitter_test
+        tests/full_function_emitter_test.cpp
+        src/ps1_exe_parser.cpp
+        src/mips_decoder.cpp
+        src/strict_translator.cpp
+        src/pgxp_hook_emitter.cpp
+        src/bios_address_model.cpp
+        src/function_discovery.cpp
+        src/full_function_emitter.cpp
+        src/config_loader.cpp
+        src/recompiler_patch.cpp
+    )
+    target_include_directories(full_function_emitter_test PRIVATE
+        include
+        src
+        lib/rabbitizer/include
+        lib/rabbitizer/cplusplus/include
+        lib/fmt/include
+        lib/toml11
+    )
+    target_link_libraries(full_function_emitter_test PRIVATE fmt rabbitizer)
+    add_test(NAME full_function_emitter_test COMMAND full_function_emitter_test)
+
+    add_executable(signed_x_bound_codegen_test
+        tests/signed_x_bound_codegen_test.cpp
+        src/ps1_exe_parser.cpp
+        src/mips_decoder.cpp
+        src/control_flow.cpp
+        src/function_analysis.cpp
+        src/code_generator.cpp
+        src/pgxp_hook_emitter.cpp
+        src/annotations.cpp
+        src/bios_address_model.cpp
+        src/config_loader.cpp
+        src/recompiler_patch.cpp
+    )
+    target_include_directories(signed_x_bound_codegen_test PRIVATE
+        include
+        src
+        lib/rabbitizer/include
+        lib/rabbitizer/cplusplus/include
+        lib/fmt/include
+        lib/toml11
+        lib/ELFIO
+    )
+    target_link_libraries(signed_x_bound_codegen_test PRIVATE fmt rabbitizer)
+    add_test(NAME signed_x_bound_codegen_test
+             COMMAND signed_x_bound_codegen_test)
+
+    add_executable(ws_cull_edge_codegen_test
+        tests/ws_cull_edge_codegen_test.cpp
+        src/ps1_exe_parser.cpp
+        src/mips_decoder.cpp
+        src/control_flow.cpp
+        src/function_analysis.cpp
+        src/code_generator.cpp
+        src/pgxp_hook_emitter.cpp
+        src/annotations.cpp
+        src/bios_address_model.cpp
+        src/config_loader.cpp
+        src/recompiler_patch.cpp
+    )
+    target_include_directories(ws_cull_edge_codegen_test PRIVATE
+        include
+        src
+        lib/rabbitizer/include
+        lib/rabbitizer/cplusplus/include
+        lib/fmt/include
+        lib/toml11
+        lib/ELFIO
+    )
+    target_link_libraries(ws_cull_edge_codegen_test PRIVATE fmt rabbitizer)
+    add_test(NAME ws_cull_edge_codegen_test
+             COMMAND ws_cull_edge_codegen_test)
+
+    # [widescreen.cull] screen_x_sites on `lui` and `bltz` (a screen X kept in
+    # the high half of a register): emitted code for hand-written instruction
+    # words, the main-EXE guard, and the shared math in ws_cull_edge.h.
+    add_executable(ws_cull_screen_x_hi_codegen_test
+        tests/ws_cull_screen_x_hi_codegen_test.cpp
+        src/ps1_exe_parser.cpp
+        src/mips_decoder.cpp
+        src/control_flow.cpp
+        src/function_analysis.cpp
+        src/code_generator.cpp
+        src/pgxp_hook_emitter.cpp
+        src/annotations.cpp
+        src/bios_address_model.cpp
+        src/config_loader.cpp
+        src/recompiler_patch.cpp
+    )
+    target_include_directories(ws_cull_screen_x_hi_codegen_test PRIVATE
+        include
+        src
+        lib/rabbitizer/include
+        lib/rabbitizer/cplusplus/include
+        lib/fmt/include
+        lib/toml11
+        lib/ELFIO
+    )
+    target_link_libraries(ws_cull_screen_x_hi_codegen_test PRIVATE fmt rabbitizer)
+    add_test(NAME ws_cull_screen_x_hi_codegen_test
+             COMMAND ws_cull_screen_x_hi_codegen_test)
+
+    # [[draw_distance.clamp]]: config rules, the emitted main-EXE clamp and
+    # its guards, the shared declaration and the unchanged overlay identity.
+    add_executable(draw_distance_codegen_test
+        tests/draw_distance_codegen_test.cpp
+        src/ps1_exe_parser.cpp
+        src/mips_decoder.cpp
+        src/control_flow.cpp
+        src/function_analysis.cpp
+        src/code_generator.cpp
+        src/pgxp_hook_emitter.cpp
+        src/annotations.cpp
+        src/bios_address_model.cpp
+        src/config_loader.cpp
+        src/recompiler_patch.cpp
+    )
+    target_include_directories(draw_distance_codegen_test PRIVATE
+        include
+        src
+        lib/rabbitizer/include
+        lib/rabbitizer/cplusplus/include
+        lib/fmt/include
+        lib/toml11
+        lib/ELFIO
+    )
+    target_link_libraries(draw_distance_codegen_test PRIVATE fmt rabbitizer)
+    add_test(NAME draw_distance_codegen_test
+             COMMAND draw_distance_codegen_test)
+
+    # The same explicit cull kinds in the dirty-RAM interpreter: gpu.c's
+    # sorted, capped site store and real interpreted bgez/bltz/branch-keep/
+    # clip-edge instructions at margin 0 and at a forced margin. The test
+    # #includes gpu.c and dirty_ram_interp.c; link-time dead-code removal
+    # keeps the stub set small (dead_strip is Apple ld's --gc-sections).
+    if(NOT MSVC)
+        add_executable(ws_cull_edge_interp_test
+            ../runtime/tests/test_ws_cull_edge_interp.c
+            ../runtime/src/ws_aspect_cone_math.c)
+        target_include_directories(ws_cull_edge_interp_test PRIVATE
+            ../runtime/include
+            ../runtime/src)
+        target_compile_options(ws_cull_edge_interp_test PRIVATE
+            -O2 -flto -ffunction-sections -fdata-sections)
+        if(APPLE)
+            target_link_options(ws_cull_edge_interp_test PRIVATE
+                -flto -Wl,-dead_strip)
+        else()
+            target_link_options(ws_cull_edge_interp_test PRIVATE
+                -flto -Wl,--gc-sections)
+        endif()
+        if(NOT WIN32)
+            target_link_libraries(ws_cull_edge_interp_test PRIVATE m)
+        endif()
+        add_test(NAME ws_cull_edge_interp_test
+                 COMMAND ws_cull_edge_interp_test
+                         ${CMAKE_CURRENT_BINARY_DIR}/ws_cull_edge_interp_stderr.txt)
+    endif()
+
+    # [[draw_distance.clamp]] in the dirty-RAM interpreter: draw_distance.c's
+    # store and switch and real interpreted guard instructions. The test
+    # #includes draw_distance.c and dirty_ram_interp.c (as above).
+    if(NOT MSVC)
+        add_executable(draw_distance_interp_test
+            ../runtime/tests/test_draw_distance_interp.c
+            ../runtime/src/ws_aspect_cone_math.c)
+        target_include_directories(draw_distance_interp_test PRIVATE
+            ../runtime/include
+            ../runtime/src)
+        target_compile_options(draw_distance_interp_test PRIVATE
+            -O2 -flto -ffunction-sections -fdata-sections)
+        if(APPLE)
+            target_link_options(draw_distance_interp_test PRIVATE
+                -flto -Wl,-dead_strip)
+        else()
+            target_link_options(draw_distance_interp_test PRIVATE
+                -flto -Wl,--gc-sections)
+        endif()
+        if(NOT WIN32)
+            target_link_libraries(draw_distance_interp_test PRIVATE m)
+        endif()
+        add_test(NAME draw_distance_interp_test
+                 COMMAND draw_distance_interp_test
+                         ${CMAKE_CURRENT_BINARY_DIR}/draw_distance_interp_stderr.txt)
+    endif()
+
+    # Uncached (KSEG1) code charges a fetch before every instruction; cached
+    # code keeps the line-leader rule (test_uncached_fetch_charge.py checks
+    # the BIOS emitter on OpenBIOS and the cycle model).
+    add_executable(uncached_fetch_codegen_test
+        tests/uncached_fetch_codegen_test.cpp
+        src/ps1_exe_parser.cpp
+        src/mips_decoder.cpp
+        src/control_flow.cpp
+        src/function_analysis.cpp
+        src/code_generator.cpp
+        src/pgxp_hook_emitter.cpp
+        src/annotations.cpp
+        src/bios_address_model.cpp
+        src/config_loader.cpp
+        src/recompiler_patch.cpp
+    )
+    target_include_directories(uncached_fetch_codegen_test PRIVATE
+        include
+        src
+        lib/rabbitizer/include
+        lib/rabbitizer/cplusplus/include
+        lib/fmt/include
+        lib/toml11
+        lib/ELFIO
+    )
+    target_link_libraries(uncached_fetch_codegen_test PRIVATE fmt rabbitizer)
+    add_test(NAME uncached_fetch_codegen_test
+             COMMAND uncached_fetch_codegen_test)
+
+    # Every guest-visible PC the game/overlay emitter and the BIOS translator
+    # bake goes through runtime_pc() (docs/SEGMENT_AWARE_CODE.md §5.2): links,
+    # fetch tags, IRQ resume PCs, CPS exits/continuation keys, store-PC stamps,
+    # EPCs. KSEG0 output is unchanged; identity keys keep the compile address.
+    add_executable(emitter_runtime_pc_test
+        tests/emitter_runtime_pc_test.cpp
+        src/ps1_exe_parser.cpp
+        src/mips_decoder.cpp
+        src/control_flow.cpp
+        src/function_analysis.cpp
+        src/code_generator.cpp
+        src/game_dispatch_emitter.cpp
+        src/strict_translator.cpp
+        src/pgxp_hook_emitter.cpp
+        src/annotations.cpp
+        src/bios_address_model.cpp
+        src/config_loader.cpp
+        src/recompiler_patch.cpp
+    )
+    target_include_directories(emitter_runtime_pc_test PRIVATE
+        include
+        src
+        lib/rabbitizer/include
+        lib/rabbitizer/cplusplus/include
+        lib/fmt/include
+        lib/toml11
+        lib/ELFIO
+    )
+    target_link_libraries(emitter_runtime_pc_test PRIVATE fmt rabbitizer)
+    add_test(NAME emitter_runtime_pc_test
+             COMMAND emitter_runtime_pc_test)
+    # The BIOS translator latches PSX_CPS at start-up; this run covers its
+    # legacy (non-CPS) syscall form.
+    add_test(NAME emitter_runtime_pc_test_legacy
+             COMMAND emitter_runtime_pc_test)
+    set_tests_properties(emitter_runtime_pc_test_legacy PROPERTIES
+                         ENVIRONMENT "PSX_CPS=0")
+
+    # Segment variants (docs/SEGMENT_AWARE_CODE.md §5.4): the planner's
+    # direct-edge closure per segment, the segment view and the variant's
+    # codegen config.
+    add_executable(segment_variants_test
+        tests/segment_variants_test.cpp
+        src/segment_variants.cpp
+        src/ps1_exe_parser.cpp
+        src/mips_decoder.cpp
+        src/control_flow.cpp
+        src/function_analysis.cpp
+        src/code_generator.cpp
+        src/pgxp_hook_emitter.cpp
+        src/annotations.cpp
+        src/bios_address_model.cpp
+        src/config_loader.cpp
+        src/recompiler_patch.cpp
+    )
+    target_include_directories(segment_variants_test PRIVATE
+        include
+        src
+        lib/rabbitizer/include
+        lib/rabbitizer/cplusplus/include
+        lib/fmt/include
+        lib/toml11
+        lib/ELFIO
+    )
+    target_link_libraries(segment_variants_test PRIVATE fmt rabbitizer)
+    add_test(NAME segment_variants_test COMMAND segment_variants_test)
+
+    add_executable(recompiler_patch_cxx17_header_test
+        tests/recompiler_patch_cxx17_header_test.cpp
+    )
+    target_include_directories(recompiler_patch_cxx17_header_test PRIVATE src)
+    set_target_properties(recompiler_patch_cxx17_header_test PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+    add_test(NAME recompiler_patch_cxx17_header_test
+             COMMAND recompiler_patch_cxx17_header_test)
+
+    # [video] geometry_correction / perspective_texturing opt-in plumbing.
+    add_executable(video_enhancement_settings_test
+        tests/video_enhancement_settings_test.cpp
+        src/config_loader.cpp
+        src/ps1_exe_parser.cpp
+    )
+    target_include_directories(video_enhancement_settings_test PRIVATE
+        include
+        src
+        lib/fmt/include
+        lib/toml11
+    )
+    target_link_libraries(video_enhancement_settings_test PRIVATE fmt)
+    add_test(NAME video_enhancement_settings_test
+             COMMAND video_enhancement_settings_test)
+
+    # [video] rewind opt-in plumbing (default off + settings round trip).
+    add_executable(rewind_settings_test
+        tests/rewind_settings_test.cpp
+        src/config_loader.cpp
+        src/ps1_exe_parser.cpp
+    )
+    target_include_directories(rewind_settings_test PRIVATE
+        include
+        src
+        lib/fmt/include
+        lib/toml11
+    )
+    target_link_libraries(rewind_settings_test PRIVATE fmt)
+    add_test(NAME rewind_settings_test COMMAND rewind_settings_test)
+
+    # Launcher-saved paths stay relative inside a portable game folder.
+    add_executable(portable_settings_paths_test
+        tests/portable_settings_paths_test.cpp
+        src/config_loader.cpp
+        src/ps1_exe_parser.cpp
+    )
+    target_include_directories(portable_settings_paths_test PRIVATE
+        include
+        src
+        lib/fmt/include
+        lib/toml11
+    )
+    target_link_libraries(portable_settings_paths_test PRIVATE fmt)
+    add_test(NAME portable_settings_paths_test COMMAND portable_settings_paths_test)
+
+    # Needs bios/SCPH1001.toml — run from the framework root.
+    add_test(NAME bios_address_model_test
+             COMMAND bios_address_model_test
+             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
+    # These targets were already built by every test build, but without
+    # add_test() entries ctest could neither run nor fail them.
+    add_test(NAME l2_structural_test COMMAND l2_structural_test)
+    add_test(NAME reachable_discovery_test COMMAND reachable_discovery_test)
+
+    find_package(Python3 COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND AND CMAKE_GENERATOR STREQUAL "Ninja")
+        add_test(NAME runtime_ipo_configuration
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_runtime_ipo.py
+                --cmake ${CMAKE_COMMAND} --cc ${CMAKE_C_COMPILER}
+                --cxx ${CMAKE_CXX_COMPILER} --ninja ${CMAKE_MAKE_PROGRAM})
+    endif()
+    # MFC0/CFC0 read COP0 from before their own cycle charge: the production
+    # interpreter decoder with cycle charging on, a device event that raises
+    # CAUSE.IP2 on the read's own cycle, other seams stubbed to abort()
+    # (runtime/tests/fixture_link.py needs nm and GNU ld diagnostics).
+    if(Python3_Interpreter_FOUND AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        add_test(NAME interp_cop0_read_sample
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_interp_cop0_read_sample.py"
+                --cc ${CMAKE_C_COMPILER})
+    endif()
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME optional_netplay_auth
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_optional_netplay_auth.py
+                --cxx ${CMAKE_CXX_COMPILER})
+        add_test(NAME bios_emitter_stamps
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bios_emitter_stamps.py
+                --cmake ${CMAKE_COMMAND})
+        add_test(NAME pgo_rebuild_flow
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_pgo_rebuild_flow.py)
+        add_test(
+            NAME cli_project_packaging
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cli_project_packaging.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
+        # tools/bios_module_build.py end to end: recompile the bundled OpenBIOS
+        # image with the psxrecomp-bios built here, compile it as a loadable
+        # BIOS module, and read the descriptor back (psx_bios_module.h).
+        # Skips itself without a C compiler on PATH.
+        add_test(
+            NAME bios_module_build
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bios_module_build.py
+                    --emitter $<TARGET_FILE:psxrecomp-bios>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
+        # The tcc build of a BIOS module sees a BOM-stripped copy of the
+        # include directory. That copy must hold the .c.inc fragments the
+        # module's glue.c includes, or the tcc build stops at "not found".
+        # Pure unit test: no compiler, no built target.
+        add_test(
+            NAME tcc_module_include_dir
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_tcc_module_include_dir.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
+        # tools/coverage_vault.py's history compaction and streaming JSON
+        # reader. Pure unit test — loads the module by path, needs no built
+        # target and no generated BIOS. It sat in tools/ with no add_test()
+        # entry anywhere, which is exactly the orphan class
+        # runtime/check_test_registration.cmake exists to prevent; moving it
+        # under tests/ puts it inside that guard's glob.
+        add_test(
+            NAME coverage_vault
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_coverage_vault.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME enrich_overlay_captures
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_enrich_overlay_captures.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
+        # The runtime exe name must come from CMake, not be re-derived.
+        add_test(
+            NAME runtime_exe_name
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_runtime_exe_name.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
+        # Bad input (game.toml errors, main-EXE [widescreen.cull] sites with
+        # the wrong opcode, an overlay the emitter must refuse) must end
+        # psxrecomp-game with exit status 1 and a message, never abort();
+        # the test requires exactly 1.
+        add_test(
+            NAME recompiler_error_exit
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_recompiler_error_exit.py
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+                    --project-root ${CMAKE_CURRENT_SOURCE_DIR}/..
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
+        # These two invoke psxrecomp-game, whose BIOS-profile resolution
+        # probes fixed working-directory-relative paths (bios/<name>.toml,
+        # then psxrecomp/bios/<name>.toml) -- run them from the framework
+        # root so the shipped profiles are found.
+        add_test(
+            NAME overlay_cross_page_delay_codegen
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_cross_page_delay_codegen.py
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # The overlay capture format's trailing delay-slot guard word: legal
+        # to READ (a branch at the run's last word emits its slot from it),
+        # illegal to ANALYSE (the word after it does not exist). Also pins
+        # that the mandatory-delay-slot throw still fires on an untagged
+        # image, and that no range manifest claims a byte past the image end.
+        # Bead beads-eio.3.100.
+        add_test(
+            NAME overlay_guard_word_analysis_bound
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_guard_word_analysis_bound.py
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # Producer half of the same contract: the capture writer declares its
+        # guard bytes and compile_overlays puts them in the PS-EXE tag the
+        # recompiler reads.
+        add_test(
+            NAME overlay_guard_bytes_declaration
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_overlay_guard_bytes_declaration.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # The pipeline reads mod manifests with tomllib (Python 3.11+). An
+        # older interpreter keeps the test registered but DISABLED, so it is
+        # reported as not run instead of silently missing from `ctest -N`.
+        add_test(
+            NAME aot_overlay_methods
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_aot_overlay_pipeline.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME counted_relocation_discovery
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_counted_relocation_discovery.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # psxrecomp_cli.py generate builds the static overlay shard a title's
+        # aot/overlays.json declares (static_output) and reports every outcome.
+        # The pipeline it drives needs Python 3.11+, so the CLI refuses older
+        # interpreters and so does this test.
+        add_test(
+            NAME cli_generate_aot_static
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_cli_generate_aot_static.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # psxrecomp_cli.py rebuild: the pre-build mtime clamp works without
+        # lutimes (Windows), and --cmake-extra wins over the shipping
+        # PSX_DEBUG_TOOLS=OFF default.
+        add_test(
+            NAME cli_rebuild_host
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_cli_rebuild_host.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # runtime/overlay_static_sources.cmake: a declared-but-absent shard is
+        # reported at configure, a profile/CMake disagreement is an error, and
+        # hash_codegen.cmake's source-list mode matches psxrecomp-game's hash.
+        add_test(
+            NAME overlay_static_sources_cmake
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_overlay_static_sources_cmake.py
+                    "--cmake=${CMAKE_COMMAND}"
+                    "--generator=${CMAKE_GENERATOR}"
+                    "--make-program=${CMAKE_MAKE_PROGRAM}"
+                    "--recompiler=$<TARGET_FILE:psxrecomp-game>"
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        if(Python3_VERSION VERSION_LESS "3.11")
+            set_tests_properties(aot_overlay_methods cli_generate_aot_static
+                                 overlay_static_sources_cmake PROPERTIES DISABLED TRUE)
+        endif()
+        # --static must walk the whole of compile_overlays.main() and exit 0:
+        # a DLL-only reconciliation at its tail once read an unbound cache_dir
+        # and failed every static run after its output was written.
+        add_test(
+            NAME compile_overlays_static_tail
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_compile_overlays_static_tail.py
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # The word after a `jr $ra` is as often a pointer table as a frameless
+        # function; a dispatch entry there must prove a CFG before it may be a
+        # walk root, or the walk runs through the table to the image end.
+        add_test(
+            NAME frameless_dispatch_root_cfg_proof
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_frameless_dispatch_root_cfg_proof.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME fmv_cycle_batch_codegen
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fmv_cycle_batch_codegen.py
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME kuseg_dispatch_lookup
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_kuseg_dispatch_lookup.py
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+                    --compiler ${CMAKE_C_COMPILER}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # Gap ledger for docs/SEGMENT_AWARE_CODE.md: a synthetic KUSEG-linked
+        # EXE, checked against a Beetle fetch-model transcription.
+        add_test(
+            NAME segment_aware_codegen
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_segment_aware_codegen.py
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+                    --bios-recompiler $<TARGET_FILE:psxrecomp-bios>
+                    --compiler ${CMAKE_C_COMPILER}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # Overlay shards keyed by segment (docs/SEGMENT_AWARE_CODE.md §5.7):
+        # capture views, per-segment cache directories and manifests, the real
+        # compile_overlays.py driver and the real overlay loader.
+        add_test(
+            NAME overlay_segment_keys
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_segment_keys.py
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+                    --compiler ${CMAKE_C_COMPILER}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # BIOS segment variants (docs/SEGMENT_AWARE_CODE.md §5.4): OpenBIOS
+        # with segment-qualified seeds, and SCPH-1001's KSEG1 kernel entry.
+        add_test(
+            NAME bios_segment_variants
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bios_segment_variants.py
+                    --bios-recompiler $<TARGET_FILE:psxrecomp-bios>
+                    --compiler ${CMAKE_C_COMPILER}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME overlay_shim_compile_contract
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_shim_compile.py)
+        add_test(
+            NAME lwlr_load_delay_forward
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_lwlr_load_delay_forward.py
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME dirty_text_continuation_guards
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_dirty_text_continuation_guards.py)
+        add_test(
+            NAME dirty_text_admission_guards
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_dirty_text_admission_guards.py)
+        add_test(
+            NAME bios_backend_constant_codegen
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bios_backend_constant_codegen.py
+                    --recompiler $<TARGET_FILE:psxrecomp-bios>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME bios_vector_stub_shapes
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bios_vector_stub_shapes.py
+                    --recompiler $<TARGET_FILE:psxrecomp-bios>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # Compiled BIOS fetch charges == the interpreter's (psx_icache.c) ==
+        # Beetle, per instruction, on OpenBIOS: KSEG1 ROM code pays every fetch.
+        add_test(
+            NAME uncached_fetch_charge
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_uncached_fetch_charge.py
+                    --bios-recompiler $<TARGET_FILE:psxrecomp-bios>
+                    --compiler ${CMAKE_C_COMPILER}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME stall_report
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_stall_report.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
+        # ---- offline tool unit tests (tools/tests, tools/, tests/) -----------
+        # Pure-Python unit tests of the offline tools: no built target and no
+        # generated BIOS, so they belong in this BIOS-free tree. They had no
+        # add_test() entry and were only run by whoever remembered to invoke
+        # pytest by hand. check_test_registration.cmake now globs these
+        # directories too, so a new one fails configure until it is listed.
+        # test_psx_chd skips its decode cases unless a shared libchdr is found
+        # (PSXRECOMP_LIBCHDR); its container/selection cases always run.
+        # test_bundled_release_layout pins the bundled-release contract (CI
+        # template, scaffold, check_generated.sh, Project Studio audit/ops).
+        foreach(_t IN ITEMS
+                aligned_lzss_banks
+                bundled_release_layout
+                collect_game_misses
+                cursor_writers
+                disc_companion
+                duckstation_oracle
+                fp_identity
+                gpu_frame
+                menu_scan
+                migrate_probe_refresh
+                mips_tagged_relocations
+                overlay_widescreen_callbacks
+                pad_delivery
+                pad_trace
+                psx_chd
+                sbi_registry
+                static_fragment_variant_keys)
+            add_test(
+                NAME ${_t}
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_${_t}.py
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        endforeach()
+        add_test(
+            NAME compile_overlays_static_split
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_compile_overlays_static_split.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME aot_overlay_spike_coverage_report
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/aot_overlay_spike/test_coverage_report.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME disc_inventory
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_disc_inventory.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
+        # ---- codegen tests that were written but never registered -----------
+        # These existed in recompiler/tests/ with no add_test() entry, so they
+        # had no way to run and no way to fail. Each was executed manually
+        # before being wired here; all pass. They drive psxrecomp-game, so they
+        # run from the framework root for BIOS-profile resolution, exactly like
+        # the two above.
+        foreach(_t IN ITEMS
+                aot_base_recovery
+                bios_resident_shard
+                computed_stride_jump_codegen
+                msvc_cps_codegen
+                overlay_guard_codegen
+                overlay_store_barrier_codegen
+                reachable_discovery_codegen)
+            add_test(
+                NAME ${_t}
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_${_t}.py
+                        --recompiler $<TARGET_FILE:psxrecomp-game>
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        endforeach()
+
+        # test_aot_overlay_discovery.py had no add_test() entry at all. It runs
+        # far enough to exercise real discovery, then fails in
+        # check_real_batched_fragment_publication: that check reaches
+        # MOD.compile_fragment_batch, which spawns psxrecomp-game with cwd set
+        # to its own TemporaryDirectory, so BIOS-profile resolution (which
+        # probes bios/SCPH1001.toml relative to the working directory) finds
+        # nothing and returns "recompiler-error: no BIOS profile found". Every
+        # other subprocess in the same file passes cwd=str(ROOT) explicitly, so
+        # this looks like a missed cwd rather than a product defect — but it
+        # needs an owner, and DISABLED keeps it counted until then.
+        add_test(
+            NAME aot_overlay_discovery
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_aot_overlay_discovery.py
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # Original-disc extraction's normal-mode discovery resolves its BIOS
+        # profile from --project-root, not the cwd, and a failed recompiler run
+        # aborts extraction instead of silently shipping fewer native pairs.
+        add_test(
+            NAME extract_discovery_project_root
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_extract_discovery_project_root.py
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
+        # ---- runtime source-invariant guards --------------------------------
+        # These live in runtime/tests/ but only READ runtime source, so they
+        # need neither a generated BIOS nor a built runtime. Registering them
+        # here (as dirty_text_continuation_guards already was) means they run
+        # from a plain recompiler build, which is the only tree a newcomer can
+        # configure before regenerating a BIOS. Each was run manually first;
+        # all pass.
+        #
+        foreach(_t IN ITEMS
+                bios_selection_guards
+                capture_history
+                cli_retail_bios_profile
+                codegen_host_bios_stems
+                default_renderer_guards
+                mod_owned_display_controls
+                fmv_quiet_guards
+                fps_telemetry_opt_in
+                frame_interpolation_display_rate
+                frame_interpolation_flip_source
+                hybrid_dev_any_input
+                launcher_pad_mode_wiring
+                netplay_start_failure_wiring
+                jalr_link_register_guards
+                gl_internal_scale_guards
+                launcher_vulkan_option
+                mod_controller_override
+                mod_load_acceleration
+                native_wide_line_batching
+                overlay_candidate_capacity
+                release_zip
+                overlay_decodable_fallback
+                overlay_init_guard
+                overlay_segment_gate
+                recomp_ui_root_override
+                render_pass_guards
+                pal_cadence_host_refresh
+                sdl3_main_single_include
+                spu_sample_scheduler_default
+                vk_build_default
+                vk_color_self_barrier
+                vk_command_buffer_batching
+                vk_draw_area_batch_boundary
+                vk_mailbox_policy
+                vk_present_timing
+                vk_present_wait_stage
+                vk_staging_cache
+                wide_overlay_band_scissor)
+            add_test(
+                NAME ${_t}
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_${_t}.py
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        endforeach()
+
+        # ---- known-failing guards: DISABLED, not de-registered ---------------
+        # These three were previously left out of the list above with a comment
+        # explaining that they FAIL and that wiring a red check would recreate
+        # the problem that took CI off PRs. That reasoning is right; the remedy
+        # was not. De-registering is precisely how a test stops being counted,
+        # and it is the mechanism that let 16 C/C++ tests rot in runtime/tests/.
+        #
+        # ctest's DISABLED property is the intended tool: the test stays
+        # registered, stays visible in `ctest -N`, and is reported as Disabled
+        # rather than silently absent — without turning the run red. Delete the
+        # matching set_tests_properties line to re-enable one once it is fixed.
+        #
+        #   interpreter_perf_guards    psx_devices_mmio_sync's recompute-deadline
+        #                              branch never clears g_psx_cycle_fast_limit,
+        #                              and the guard still names the pre-rename
+        #                              s_next_service_cycle
+        #   runtime_perf_diag_guards   asserts a substring no longer present in
+        #                              the runtime source
+        #   overlay_pair_dedup_runtime needs its companion harness built; not a
+        #                              source-only guard
+        foreach(_t IN ITEMS
+                interpreter_perf_guards
+                runtime_perf_diag_guards
+                overlay_pair_dedup_runtime)
+            add_test(
+                NAME ${_t}
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_${_t}.py
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+            set_tests_properties(${_t} PROPERTIES DISABLED TRUE)
+        endforeach()
+    endif()
+endif()
+
+# Reachable main-EXE discovery test: parser-bound validation plus exact-entry
+# analysis behavior for direct, indirect, seeded, and out-of-bound targets.
+add_executable(reachable_discovery_test
+    tests/reachable_discovery_test.cpp
+    src/function_analysis.cpp
+    src/ps1_exe_parser.cpp
+)
+target_include_directories(reachable_discovery_test PRIVATE
+    include
+    lib/fmt/include
+)
+target_link_libraries(reachable_discovery_test PRIVATE fmt)
+
+# Straight-line interpretation keeps going through game text that dispatch
+# refuses (live bytes differ from the boot EXE) instead of handing each
+# instruction back: the production interpreter linked into a fixture, other
+# seams stubbed to abort() (runtime/tests/fixture_link.py needs nm and GNU ld).
+if(BUILD_TESTING AND Python3_Interpreter_FOUND AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    add_test(NAME interp_refused_game_text
+        COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_interp_refused_game_text.py"
+            --cc ${CMAKE_C_COMPILER})
+endif()
+
+# GTE deadline ownership includes pending CPU charges from both host sinks.
+if(BUILD_TESTING AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    foreach(_mode IN ITEMS O0 O2)
+        set(_target "tas_gte_deferred_${_mode}")
+        add_executable(${_target}
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_gte_deferred.c"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/src/psx_cycles.c")
+        target_include_directories(${_target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/include")
+        target_compile_definitions(${_target} PRIVATE PSX_ENABLE_BLOCK_CYCLES=1)
+        target_compile_options(${_target} PRIVATE -${_mode} -UNDEBUG -ffunction-sections -fdata-sections)
+        target_link_options(${_target} PRIVATE -Wl,--gc-sections)
+        add_test(NAME ${_target} COMMAND ${_target})
+    endforeach()
+endif()
+
+# The store that kicks a GPU linked-list DMA holds the CPU until the walk
+# ends: the production dma.c and dma_gpu_ll.c linked into a fixture, other
+# seams stubbed to abort() (runtime/tests/fixture_link.py needs nm and GNU ld).
+if(BUILD_TESTING AND Python3_Interpreter_FOUND AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    add_test(NAME dma_gpu_list_cpu_hold
+        COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_dma_gpu_list_cpu_hold.py"
+            --cc ${CMAKE_C_COMPILER})
+endif()
+
+# Mult/div deadline ownership: the same rule for MULT/DIV and MFLO/MFHI.
+if(BUILD_TESTING AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    foreach(_mode IN ITEMS O0 O2)
+        set(_target "muldiv_deferred_${_mode}")
+        add_executable(${_target}
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_muldiv_deferred.c"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/src/psx_cycles.c")
+        target_include_directories(${_target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/include")
+        target_compile_definitions(${_target} PRIVATE PSX_ENABLE_BLOCK_CYCLES=1)
+        target_compile_options(${_target} PRIVATE -${_mode} -UNDEBUG -ffunction-sections -fdata-sections)
+        target_link_options(${_target} PRIVATE -Wl,--gc-sections)
+        add_test(NAME ${_target} COMMAND ${_target})
+    endforeach()
+endif()
+
+# ChangeThread to the running thread continues after the SYSCALL: the
+# production traps.c linked into a fixture, other seams stubbed to abort()
+# (runtime/tests/fixture_link.py needs nm and GNU ld diagnostics).
+if(BUILD_TESTING AND Python3_Interpreter_FOUND AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    add_test(NAME syscall_change_thread_self
+        COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_syscall_change_thread_self.py"
+            --cc ${CMAKE_C_COMPILER})
+endif()
+
+# Presentation capture ring: distinct-presentation dedupe and bounded slots.
+if(BUILD_TESTING)
+    add_executable(present_image_ring_test
+        ../runtime/tests/test_present_image_ring.c
+        ../runtime/src/present_image_ring.c)
+    target_include_directories(present_image_ring_test PRIVATE ../runtime/include)
+    add_test(NAME present_image_ring_test COMMAND present_image_ring_test)
+endif()
+
+# ---- test-registration completeness guard -----------------------------------
+if(BUILD_TESTING AND Python3_Interpreter_FOUND AND NOT MSVC)
+    add_test(NAME gpu_upload_history
+        COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_gpu_upload_history.py"
+            --cc ${CMAKE_C_COMPILER})
+endif()
+
+# Reads both CMakeLists.txt files as text, so it catches an orphan in either
+# project from whichever one is being configured. Placed before the collision
+# guard, which must stay last because it needs every target declared; this one
+# inspects files on disk and has no such ordering requirement.
+include(${CMAKE_CURRENT_SOURCE_DIR}/../runtime/check_test_registration.cmake)
+psxrecomp_check_all_tests_registered()
+
+# ---- output-name collision guard (must stay LAST) ---------------------------
+# Fails configure if any two targets here would write the same file on a
+# case-insensitive filesystem. See the module header for the shipped-bug story.
+include(${CMAKE_CURRENT_SOURCE_DIR}/../runtime/check_target_name_collisions.cmake)
+psxrecomp_check_output_name_collisions()
