@@ -1715,19 +1715,21 @@ void eyebrow_tracked(const char* s) {
     if (strstr(s, "DISPLAY")) { icon = &g_icon_display; tag = "DISP"; }
     else if (strstr(s, "GRAPHIC")) { icon = &g_icon_graphics; tag = "GFX"; }
     else if (strstr(s, "AUDIO")) { icon = &g_icon_audio; tag = "AUD"; }
-    else if (strstr(s, "INPUT") || strstr(s, "CONTROLLER")) { icon = &g_icon_input; tag = "INP"; }
+    else if (strstr(s, "INPUT") || strstr(s, "CONTROLLER") || strstr(s, "PLAYER")) { icon = &g_icon_input; tag = "INP"; }
     else if (strstr(s, "SYSTEM") || strstr(s, "ASSIST")) { icon = &g_icon_system; tag = "SYS"; }
     else if (strstr(s, "SAVE")) { icon = &g_icon_saves; tag = "SAV"; }
     else if (strstr(s, "HOTKEY")) { icon = &g_icon_hotkeys; tag = "KEY"; }
 
-    float icon_sz = px(18.0f);
+    float icon_sz = px(24.0f);
     if (icon && icon->id) {
         float bw = icon_sz, bh = icon_sz;
         float s_factor = (bw / (float)icon->w < bh / (float)icon->h)
                            ? bw / (float)icon->w : bh / (float)icon->h;
-        ImGui::SetCursorScreenPos(ImVec2(p.x, p.y + (h - icon->h * s_factor) * 0.5f));
-        ImGui::Image(tid(*icon), ImVec2(icon->w * s_factor, icon->h * s_factor));
-        p.x += icon_sz + px(8.0f);
+        float dw = icon->w * s_factor;
+        float dh = icon->h * s_factor;
+        float iy = p.y + (h - dh) * 0.5f;
+        dl->AddImage(tid(*icon), ImVec2(p.x, iy), ImVec2(p.x + dw, iy + dh));
+        p.x += dw + px(8.0f);
     } else if (is_ac && tag) {
         // Procedural Armored Core tactical placeholder icon
         dl->AddRect(ImVec2(p.x, p.y + px(1.0f)), ImVec2(p.x + icon_sz, p.y + icon_sz + px(1.0f)),
@@ -14799,15 +14801,37 @@ extern "C" LngAction launcher_backend_run(LauncherPlatform* p,
     g_memcard = launcher_texture_load(asset("assets/img/memcard.tga").c_str());
 
     auto load_category_icon = [](const char* base) -> LauncherTexture {
-        const char* dirs[] = { "assets/ui/", "assets/img/", "assets/" };
+        const char* dirs[] = { "assets/ui/", "assets/img/", "assets/", "" };
         const char* exts[] = { ".png", ".tga" };
+        const char* base_dirs[] = { "", "../", "build-release/", "build-current/" };
+
+        // 1. Check via asset() (which resolves relative to SDL_GetBasePath())
         for (const char* d : dirs) {
             for (const char* e : exts) {
                 std::string p = asset((std::string(d) + base + e).c_str());
                 LauncherTexture t = launcher_texture_load(p.c_str());
-                if (t.id) return t;
+                if (t.id) {
+                    std::fprintf(stderr, "[rui] loaded icon '%s' from '%s' (%dx%d, id=%u)\n",
+                                 base, p.c_str(), t.w, t.h, t.id);
+                    return t;
+                }
             }
         }
+        // 2. Check relative to CWD and parent / sibling build directories
+        for (const char* bd : base_dirs) {
+            for (const char* d : dirs) {
+                for (const char* e : exts) {
+                    std::string p = std::string(bd) + d + base + e;
+                    LauncherTexture t = launcher_texture_load(p.c_str());
+                    if (t.id) {
+                        std::fprintf(stderr, "[rui] loaded icon '%s' from '%s' (%dx%d, id=%u)\n",
+                                     base, p.c_str(), t.w, t.h, t.id);
+                        return t;
+                    }
+                }
+            }
+        }
+        std::fprintf(stderr, "[rui] failed to load icon '%s'\n", base);
         return {0, 0, 0};
     };
     g_icon_display  = load_category_icon("icon_display");

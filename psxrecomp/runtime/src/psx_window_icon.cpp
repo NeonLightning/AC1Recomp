@@ -48,7 +48,9 @@ static fs::path exe_dir_from_argv0(const char *argv0)
         const char *base = SDL_GetBasePath();
         if (base) {
             exe_dir = fs::path(base);
+#if !defined(PSX_SDL3)
             SDL_free((void *)base);
+#endif
         }
     }
     if (exe_dir.empty()) exe_dir = fs::path(".");

@@ -691,6 +691,7 @@ static void render_toast_argb(RecompRuntimeUi *ui, void *pixels, int width,
 
 extern unsigned char* launcher_image_load_rgba(const char* path, int* w, int* h);
 extern void launcher_image_free(unsigned char* pixels);
+extern const char *SDL_GetBasePath(void);
 
 typedef struct UiIcon {
     int attempted;
@@ -710,22 +711,36 @@ static UiIcon s_img_header = {0, 0, 0, NULL};
 static void try_load_icon(UiIcon *icon, const char *base_name) {
     if (icon->attempted) return;
     icon->attempted = 1;
-    const char *dirs[] = { "assets/ui/", "assets/img/", "assets/" };
+
+    const char *sdl_base = SDL_GetBasePath();
+    const char *bases[6];
+    size_t base_count = 0;
+    if (sdl_base && sdl_base[0]) bases[base_count++] = sdl_base;
+    bases[base_count++] = "";
+    bases[base_count++] = "../";
+    bases[base_count++] = "build-release/";
+    bases[base_count++] = "build-current/";
+
+    const char *dirs[] = { "assets/ui/", "assets/img/", "assets/", "" };
     const char *exts[] = { ".png", ".tga" };
-    char path[256];
-    for (size_t d = 0; d < sizeof(dirs)/sizeof(dirs[0]); ++d) {
-        for (size_t e = 0; e < sizeof(exts)/sizeof(exts[0]); ++e) {
-            snprintf(path, sizeof(path), "%s%s%s", dirs[d], base_name, exts[e]);
-            int w = 0, h = 0;
-            unsigned char *px = launcher_image_load_rgba(path, &w, &h);
-            if (px && w > 0 && h > 0) {
-                icon->pixels = px;
-                icon->w = w;
-                icon->h = h;
-                return;
+    char path[512];
+    for (size_t b = 0; b < base_count; ++b) {
+        for (size_t d = 0; d < sizeof(dirs)/sizeof(dirs[0]); ++d) {
+            for (size_t e = 0; e < sizeof(exts)/sizeof(exts[0]); ++e) {
+                snprintf(path, sizeof(path), "%s%s%s%s", bases[b], dirs[d], base_name, exts[e]);
+                int w = 0, h = 0;
+                unsigned char *px = launcher_image_load_rgba(path, &w, &h);
+                if (px && w > 0 && h > 0) {
+                    fprintf(stderr, "[overlay] loaded icon '%s' from '%s' (%dx%d)\n", base_name, path, w, h);
+                    icon->pixels = px;
+                    icon->w = w;
+                    icon->h = h;
+                    return;
+                }
             }
         }
     }
+    fprintf(stderr, "[overlay] could not find icon '%s' in any directory\n", base_name);
 }
 
 static void blit_rgba_scaled(void *dst_pixels, int dst_w, int dst_h, int dst_pitch,
@@ -796,8 +811,11 @@ static void draw_cursor(void *pixels, int width, int height, int pitch,
                         int x, int y, int sz, int scale, uint32_t color) {
     try_load_icon(&s_img_cursor, "cursor");
     if (s_img_cursor.pixels) {
+        int dw = sz, dh = sz;
+        if (s_img_cursor.w > s_img_cursor.h) dh = (s_img_cursor.h * sz) / s_img_cursor.w;
+        else if (s_img_cursor.h > s_img_cursor.w) dw = (s_img_cursor.w * sz) / s_img_cursor.h;
         blit_rgba_scaled(pixels, width, height, pitch, s_img_cursor.pixels,
-                         s_img_cursor.w, s_img_cursor.h, x, y, sz, sz);
+                         s_img_cursor.w, s_img_cursor.h, x, y + (sz - dh) / 2, dw, dh);
     } else {
         int half = sz / 2;
         for (int i = 0; i <= half; ++i) {
@@ -827,21 +845,23 @@ void recomp_runtime_ui_render_argb8888(RecompRuntimeUi *ui, void *pixels,
     #define RGB8(c) (((uint32_t)((c).r * 255.0f) << 16) | \
                      ((uint32_t)((c).g * 255.0f) << 8) | \
                      (uint32_t)((c).b * 255.0f))
-    const uint32_t white = RGB8(theme.text), muted = RGB8(theme.text_muted);
-    const uint32_t accent = RGB8(theme.accent), accent2 = RGB8(theme.accent2);
-    const uint32_t panel = RGB8(theme.panel);
-    const uint32_t selected = RGB8(theme.control_hovered);
-    const uint32_t disabled = RGB8(theme.text_muted);
-    const uint32_t border = RGB8(theme.border);
+    const uint32_t white = RGB8(theme.text);
+    const uint32_t muted = RGB8(theme.text_muted);
+    const uint32_t accent = RGB8(theme.accent);
+    const uint32_t accent2 = RGB8(theme.accent2);
+    const uint32_t panel = 0x08090b; // deep tactical black
+    const uint32_t selected = 0x181c20; // industrial military grey selection
+    const uint32_t disabled = 0x48525c;
+    const uint32_t border = 0x38424d; // military steel border
 
-    /* This presentation's own default dim is 130/255. */
-    const float dim = 130.0f * ui->dim / RECOMP_RUNTIME_UI_DEFAULT_DIM;
+    /* Deep black dimming for tactical cockpit look */
+    const float dim = 175.0f * ui->dim / RECOMP_RUNTIME_UI_DEFAULT_DIM;
     rect(pixels,width,height,pitch,0,0,width,height,0x000000,
          (unsigned)(dim > 255.0f ? 255.0f : dim));
     rect(pixels,width,height,pitch,panel_x,panel_y,panel_w,panel_h,panel,
-         (unsigned)(238.0f * ui->opacity));
+         (unsigned)(248.0f * ui->opacity));
     outline(pixels,width,height,pitch,panel_x,panel_y,panel_w,panel_h,scale,border);
-    outline(pixels,width,height,pitch,panel_x + scale,panel_y + scale,panel_w - 2*scale,panel_h - 2*scale,scale,border);
+    outline(pixels,width,height,pitch,panel_x + scale,panel_y + scale,panel_w - 2*scale,panel_h - 2*scale,scale,0x1b2026);
 
     // Tactical Armored Core corner brackets
     rect(pixels, width, height, pitch, panel_x, panel_y, 14 * scale, 2 * scale, accent, 255);
@@ -898,8 +918,8 @@ void recomp_runtime_ui_render_argb8888(RecompRuntimeUi *ui, void *pixels,
          14*scale,3*scale,accent,255);
 
     int list_y = panel_y + 32 * scale + header_extra;
-    int footer_y = panel_y + panel_h - 28 * scale;
-    int row_h = 16 * scale;
+    int footer_y = panel_y + panel_h - 26 * scale;
+    int row_h = 18 * scale;
     int visible = (footer_y - list_y) / row_h;
     if (visible < 1) visible = 1;
     size_t count = ui->in_section ? recomp_runtime_ui_page_entry_count(ui)
@@ -911,17 +931,17 @@ void recomp_runtime_ui_render_argb8888(RecompRuntimeUi *ui, void *pixels,
         size_t index = first + (size_t)line;
         int y = list_y + line * row_h;
         if (index == selection) {
-            rect(pixels,width,height,pitch,panel_x+pad/2,y-3*scale,
-                 panel_w-pad,row_h,selected,220);
-            outline(pixels,width,height,pitch,panel_x+pad/2,y-3*scale,
+            rect(pixels,width,height,pitch,panel_x+pad/2,y-2*scale,
+                 panel_w-pad,row_h,selected,240);
+            outline(pixels,width,height,pitch,panel_x+pad/2,y-2*scale,
                     panel_w-pad,row_h,scale,accent);
-            rect(pixels,width,height,pitch,panel_x+pad/2,y-3*scale,
+            rect(pixels,width,height,pitch,panel_x+pad/2,y-2*scale,
                  3*scale,row_h,accent,255);
-            rect(pixels,width,height,pitch,panel_x+panel_w-pad/2-3*scale,y-3*scale,
+            rect(pixels,width,height,pitch,panel_x+panel_w-pad/2-3*scale,y-2*scale,
                  3*scale,row_h,accent,255);
             draw_cursor(pixels,width,height,pitch,
-                        panel_x+pad/2+6*scale,y-3*scale+(row_h-8*scale)/2,
-                        8*scale,scale,accent);
+                        panel_x+pad/2+4*scale,y-2*scale+(row_h-13*scale)/2,
+                        13*scale,scale,accent);
         }
         char folder[96] = "";
         const RecompRuntimeUiItem *item = ui->in_section
@@ -938,11 +958,15 @@ void recomp_runtime_ui_render_argb8888(RecompRuntimeUi *ui, void *pixels,
             else if (same_text(name, "System")) { try_load_icon(&s_img_system, "icon_system"); ico = &s_img_system; }
             else if (same_text(name, "Saves")) { try_load_icon(&s_img_saves, "icon_saves"); ico = &s_img_saves; }
 
-            int icon_sz = 9 * scale;
+            int icon_sz = 14 * scale;
             int icon_x = panel_x + pad / 2 + 18 * scale;
-            int icon_y = y - 3 * scale + (row_h - icon_sz) / 2;
+            int icon_y = y - 2 * scale + (row_h - icon_sz) / 2;
             if (ico && ico->pixels) {
-                blit_rgba_scaled(pixels, width, height, pitch, ico->pixels, ico->w, ico->h, icon_x, icon_y, icon_sz, icon_sz);
+                int dw = icon_sz, dh = icon_sz;
+                if (ico->w > ico->h) dh = (ico->h * icon_sz) / ico->w;
+                else if (ico->h > ico->w) dw = (ico->w * icon_sz) / ico->h;
+                blit_rgba_scaled(pixels, width, height, pitch, ico->pixels, ico->w, ico->h,
+                                 icon_x + (icon_sz - dw) / 2, icon_y + (icon_sz - dh) / 2, dw, dh);
             } else {
                 draw_placeholder_icon(pixels, width, height, pitch, name, icon_x, icon_y, icon_sz, scale, index == selection ? accent : muted);
             }
@@ -961,9 +985,31 @@ void recomp_runtime_ui_render_argb8888(RecompRuntimeUi *ui, void *pixels,
             item_value(ui, item, value, sizeof(value));
             int value_w = text_width(value, scale);
             int text_x = panel_x + pad / 2 + 18 * scale;
-            draw_text(pixels,width,height,pitch,text_x,y,scale,
-                      index == selection ? accent : muted, "//", text_x + 12*scale);
-            text_x += 12 * scale;
+
+            // Draw category icon for current section if loaded
+            UiIcon *sec_ico = NULL;
+            const char *sec_name = (ui->sections && ui->section_index < ui->section_count)
+                                       ? ui->sections[ui->section_index] : "";
+            if (same_text(sec_name, "Display")) sec_ico = &s_img_display;
+            else if (same_text(sec_name, "Graphics")) sec_ico = &s_img_graphics;
+            else if (same_text(sec_name, "Audio")) sec_ico = &s_img_audio;
+            else if (same_text(sec_name, "Input")) sec_ico = &s_img_input;
+            else if (same_text(sec_name, "System")) sec_ico = &s_img_system;
+            else if (same_text(sec_name, "Saves")) sec_ico = &s_img_saves;
+
+            if (sec_ico && sec_ico->pixels) {
+                int isz = 10 * scale;
+                int dw = isz, dh = isz;
+                if (sec_ico->w > sec_ico->h) dh = (sec_ico->h * isz) / sec_ico->w;
+                else if (sec_ico->h > sec_ico->w) dw = (sec_ico->w * isz) / sec_ico->h;
+                blit_rgba_scaled(pixels, width, height, pitch, sec_ico->pixels, sec_ico->w, sec_ico->h,
+                                 text_x, y - 2 * scale + (row_h - isz) / 2, dw, dh);
+                text_x += isz + 4 * scale;
+            } else {
+                draw_text(pixels,width,height,pitch,text_x,y,scale,
+                          index == selection ? accent : muted, "//", text_x + 12*scale);
+                text_x += 12 * scale;
+            }
             draw_text(pixels,width,height,pitch,text_x,y,scale,color,
                       item->label,panel_x+panel_w-pad-value_w-8*scale);
             draw_text(pixels,width,height,pitch,panel_x+panel_w-pad-value_w,y,

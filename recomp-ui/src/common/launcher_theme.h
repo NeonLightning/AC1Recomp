@@ -279,28 +279,28 @@ static inline LauncherTheme launcher_theme_gbc(void) {
 }
 
 // "Armored Core" theme. The industrial Raven / Nest cockpit aesthetic:
-// deep charcoal-black ground, signature AC amber accent (#FF9E00), tactical
-// cyan secondary accent (#00E5FF), military slate text, and crisp CRT scanlines.
+// pure black background, matte military charcoal panels, industrial gunmetal
+// borders, sharp amber accents, tactical cyan secondary highlights, and CRT scanlines.
 static inline LauncherTheme launcher_theme_ac(void) {
     LauncherTheme t = launcher_theme_default();
-    t.background      = lng_rgba(0.027f, 0.035f, 0.051f, 1.0f); // #07090D deep Raven black
-    t.background2     = lng_rgba(0.051f, 0.067f, 0.090f, 1.0f); // #0D1117
-    t.panel           = lng_rgba(0.051f, 0.071f, 0.098f, 1.0f); // #0D1219 tactical dark panel
-    t.panel_hovered   = lng_rgba(0.086f, 0.114f, 0.149f, 1.0f); // #161D26
-    t.control         = lng_rgba(0.071f, 0.094f, 0.125f, 1.0f); // #121820 button
-    t.control_hovered = lng_rgba(0.220f, 0.165f, 0.031f, 1.0f); // #382A08 amber glow hover
-    t.border          = lng_rgba(0.180f, 0.239f, 0.310f, 1.0f); // #2E3D4F industrial steel frame
+    t.background      = lng_rgba(0.000f, 0.000f, 0.000f, 1.0f); // #000000 pure black void
+    t.background2     = lng_rgba(0.024f, 0.027f, 0.031f, 1.0f); // #060708 industrial gradient
+    t.panel           = lng_rgba(0.043f, 0.051f, 0.059f, 1.0f); // #0B0D0F matte military charcoal
+    t.panel_hovered   = lng_rgba(0.082f, 0.094f, 0.106f, 1.0f); // #15181B cold gunmetal steel
+    t.control         = lng_rgba(0.071f, 0.082f, 0.094f, 1.0f); // #121518 dark armor plate
+    t.control_hovered = lng_rgba(0.196f, 0.145f, 0.024f, 1.0f); // #322506 amber glow on dark steel
+    t.border          = lng_rgba(0.220f, 0.259f, 0.302f, 1.0f); // #38424D military steel frame
     t.accent          = lng_rgba(1.000f, 0.620f, 0.000f, 1.0f); // #FF9E00 Armored Core amber
-    t.accent_dim      = lng_rgba(0.776f, 0.471f, 0.000f, 1.0f); // #C67800 pressed/gradient
-    t.accent_text     = lng_rgba(0.030f, 0.030f, 0.030f, 1.0f); // bold high contrast on amber
-    t.accent2         = lng_rgba(0.000f, 0.898f, 1.000f, 1.0f); // #00E5FF tactical cyan
-    t.text            = lng_rgba(0.929f, 0.957f, 0.980f, 1.0f); // #EDF4FA HUD readout white
-    t.text_muted      = lng_rgba(0.416f, 0.502f, 0.596f, 1.0f); // #6A8098 tactical telemetry slate
-    t.good            = lng_rgba(0.000f, 0.941f, 0.627f, 1.0f); // #00F0A0 target lock green
-    t.warn            = lng_rgba(1.000f, 0.200f, 0.067f, 1.0f); // #FF3311 warning red-orange
-    t.focus_ring      = lng_rgba(1.000f, 0.620f, 0.000f, 1.0f); // amber focus
-    t.radius_sm       = 0.0f;                                     // sharp industrial corners
-    t.radius_lg       = 0.0f;                                     // sharp industrial corners
+    t.accent_dim      = lng_rgba(0.750f, 0.450f, 0.000f, 1.0f); // #BF7300 pressed
+    t.accent_text     = lng_rgba(0.000f, 0.000f, 0.000f, 1.0f); // black on amber
+    t.accent2         = lng_rgba(0.000f, 0.820f, 0.950f, 1.0f); // #00D1F2 tactical radar cyan
+    t.text            = lng_rgba(0.880f, 0.905f, 0.930f, 1.0f); // #E0E7ED HUD telemetry white
+    t.text_muted      = lng_rgba(0.440f, 0.490f, 0.540f, 1.0f); // #707D8A military gunmetal grey
+    t.good            = lng_rgba(0.000f, 0.920f, 0.580f, 1.0f); // #00EB94 target lock green
+    t.warn            = lng_rgba(1.000f, 0.220f, 0.080f, 1.0f); // #FF3814 alarm red
+    t.focus_ring      = lng_rgba(1.000f, 0.620f, 0.000f, 1.0f); // amber focus outline
+    t.radius_sm       = 0.0f;                                     // hard angular industrial corners
+    t.radius_lg       = 0.0f;                                     // hard angular industrial corners
     t.scanlines       = 1;
     return t;
 }
