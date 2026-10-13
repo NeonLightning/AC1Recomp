@@ -73,6 +73,32 @@ cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build-release --target psx-runtime
 ```
 
+### Enable Vulkan on Arch Linux
+
+The Vulkan renderer is experimental and must be compiled into the runtime and
+offered by the game config. On Arch Linux, install the headers and shader
+compiler:
+
+```sh
+sudo pacman -S vulkan-headers shaderc
+```
+
+Make sure `game.toml` has `offer_vulkan = true` in its `[video]` section. Then
+configure and build in a fresh build directory (for example, `build-current`):
+
+```sh
+cmake -S . -B build-current -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DPSXRECOMP_ROOT="$PWD/psxrecomp" -DPSX_ENABLE_VULKAN=ON -DPSX_RECOMP_UI=ON
+cmake --build build-current --target psx-runtime -j"$(nproc)"
+```
+
+During configuration, confirm CMake reports that Vulkan headers and `glslc`
+were found. If it says the backend will build as a software stub, check that
+`vulkan/vulkan.h` and `glslc` are installed, then rerun the configure command.
+Launch `build-current/AC1` and select Vulkan in Settings → Display → Renderer.
+Use a fresh build directory if an existing CMake cache belongs to another
+checkout; CMake cannot safely reuse that cache.
+
 Releases: tag `vX.Y.Z` (or run the *Release builds* workflow). CI builds the
 committed `generated/` C on Linux, Windows and macOS and attaches
 `ac1-<version>-<platform>.zip`, the compiled game. Locally:

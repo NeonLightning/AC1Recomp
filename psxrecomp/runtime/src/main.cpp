@@ -36,6 +36,7 @@
 #include "savestate.h"
 #include "psx_rewind.h"
 #include "psx_savestate_menu.h"
+#include "recomp_runtime_ui.h"
 #include "host_osd.h"
 #include "local_mouse_sdl.h"
 #include "pad_external_input.h"
@@ -7697,7 +7698,309 @@ static void apply_title_direct_shortcut(const std::string& shortcut,
         PSX_HOTKEY_PAD_BUTTON_COMBO((uint32_t)1u << code);
 }
 
+static void rewind_pause_present(void);
 static int savestate_menu_open = 0;
+static std::filesystem::path g_active_settings_path;
+
+static RecompRuntimeUi* g_psx_overlay_ui = nullptr;
+static int g_psx_overlay_open = 0;
+static SDL_Keycode g_psx_overlay_open_key = 0;
+static uint32_t g_psx_overlay_pixels[640 * 480];
+
+static void psx_overlay_sync_pixels(void) {
+    if (!g_psx_overlay_open || !g_psx_overlay_ui) {
+        psx_savestate_menu_set_external_overlay(0, nullptr, 0, 0);
+        return;
+    }
+    std::memset(g_psx_overlay_pixels, 0, sizeof(g_psx_overlay_pixels));
+    recomp_runtime_ui_render_argb8888(g_psx_overlay_ui, g_psx_overlay_pixels, 640, 480, 640 * 4);
+    psx_savestate_menu_set_external_overlay(1, g_psx_overlay_pixels, 640, 480);
+}
+
+static int psx_overlay_ui_get_value(void* ctx, const RecompRuntimeUiItem* item, int* value_out) {
+    (void)ctx;
+    if (!item || !item->key || !value_out) return 0;
+    if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_FULLSCREEN) == 0) {
+        *value_out = s_window_fullscreen.mode ? (g_fullscreen ? g_fullscreen : 1) : 0;
+        return 1;
+    }
+    if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_VIEW_MODE) == 0) {
+        *value_out = (g_video_aspect_num == 16 && g_video_aspect_den == 9)
+                         ? RECOMP_RUNTIME_UI_VIEW_FIXED_16_9
+                         : RECOMP_RUNTIME_UI_VIEW_NATIVE;
+        return 1;
+    }
+    if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_TEXTURE_FILTER) == 0) {
+        *value_out = g_video_texfilter ? 1 : 0;
+        return 1;
+    }
+    if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_VOLUME) == 0) {
+        *value_out = host_volume_get();
+        return 1;
+    }
+    return 0;
+}
+
+static int psx_overlay_ui_set_value(void* ctx, const RecompRuntimeUiItem* item, int value) {
+    (void)ctx;
+    if (!item || !item->key) return 0;
+    if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_FULLSCREEN) == 0) {
+        const int target = value > 0 ? (value == 2 ? 2 : 1) : 0;
+        g_fullscreen = target;
+        if (psx_window_fullscreen_set(sdl_window, &s_window_fullscreen, target) == 0)
+            host_osd_push(target ? "Fullscreen" : "Windowed", 1200);
+        return 1;
+    }
+    if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_VIEW_MODE) == 0) {
+        const int num = (value == RECOMP_RUNTIME_UI_VIEW_FIXED_16_9) ? 16 : 4;
+        const int den = (value == RECOMP_RUNTIME_UI_VIEW_FIXED_16_9) ? 9 : 3;
+        g_video_aspect_num = num;
+        g_video_aspect_den = den;
+        gl_renderer_set_display_aspect(num, den);
+        vk_renderer_set_display_aspect(num, den);
+        if (sdl_renderer) {
+            g_logical_w = 480 * num * g_video_scale / den;
+            SDL_RenderSetLogicalSize(sdl_renderer, g_logical_w, 480 * g_video_scale);
+        }
+        g_ws_projection_mode = -1;
+        refresh_widescreen_projection();
+        resize_window_keep_height_for_aspect(num, den);
+        host_osd_push((num == 16 && den == 9) ? "Aspect: 16:9" : "Aspect: 4:3", 1200);
+        return 1;
+    }
+    if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_TEXTURE_FILTER) == 0) {
+        g_video_texfilter = value ? 1 : 0;
+        gr_set_texture_filter(g_video_texfilter);
+        host_osd_push(g_video_texfilter ? "Texture filter: Linear" : "Texture filter: Nearest", 1200);
+        return 1;
+    }
+    if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_VOLUME) == 0) {
+        host_volume_set(value);
+        return 1;
+    }
+    return 0;
+}
+
+static int psx_overlay_ui_run_action(void* ctx, const RecompRuntimeUiItem* item) {
+    (void)ctx;
+    if (!item || !item->key) return 0;
+    if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_RESUME) == 0) {
+        if (g_psx_overlay_ui) recomp_runtime_ui_close(g_psx_overlay_ui);
+        return 1;
+    }
+    if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_RETURN_TO_LAUNCHER) == 0) {
+        if (g_psx_overlay_ui) recomp_runtime_ui_close(g_psx_overlay_ui);
+        if (g_netplay_from_lobby) {
+            psx_request_return_to_lobby();
+        } else {
+            shutdown_runtime();
+            std::exit(0);
+        }
+        return 1;
+    }
+    if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_QUIT) == 0) {
+        if (g_psx_overlay_ui) recomp_runtime_ui_close(g_psx_overlay_ui);
+        shutdown_runtime();
+        std::exit(0);
+        return 1;
+    }
+    return 0;
+}
+
+static void psx_overlay_ui_save(void* ctx) {
+    (void)ctx;
+    if (g_active_settings_path.empty()) return;
+    PSXRecompV4::UserSettings settings = PSXRecompV4::load_user_settings(g_active_settings_path);
+    if (settings.parse_error) return;
+    settings.aspect_num = g_video_aspect_num;
+    settings.aspect_den = g_video_aspect_den;
+    settings.has_aspect_ratio = true;
+    settings.fullscreen = g_fullscreen;
+    settings.has_fullscreen = true;
+    settings.texture_filter = g_video_texfilter;
+    settings.has_texture_filter = true;
+    PSXRecompV4::save_user_settings(g_active_settings_path, settings);
+}
+
+static void psx_overlay_ui_visibility_changed(void* ctx, int open) {
+    (void)ctx;
+    g_psx_overlay_open = open ? 1 : 0;
+    psx_overlay_sync_pixels();
+}
+
+static void psx_overlay_ensure_ui(void) {
+    if (g_psx_overlay_ui) return;
+    static RecompRuntimeUiStandardConfig cfg{};
+    cfg.menu.title = "Settings";
+    cfg.menu.subtitle = "Armored Core";
+    cfg.menu.theme = "psx";
+    cfg.menu.callbacks.context = nullptr;
+    cfg.menu.callbacks.get_value = psx_overlay_ui_get_value;
+    cfg.menu.callbacks.set_value = psx_overlay_ui_set_value;
+    cfg.menu.callbacks.run_action = psx_overlay_ui_run_action;
+    cfg.menu.callbacks.is_enabled = nullptr;
+    cfg.menu.callbacks.save = psx_overlay_ui_save;
+    cfg.menu.callbacks.visibility_changed = psx_overlay_ui_visibility_changed;
+    cfg.features = RECOMP_RUNTIME_UI_STANDARD_RESUME |
+                   RECOMP_RUNTIME_UI_STANDARD_VIEW_MODE |
+                   RECOMP_RUNTIME_UI_STANDARD_FULLSCREEN |
+                   RECOMP_RUNTIME_UI_STANDARD_TEXTURE_FILTER |
+                   RECOMP_RUNTIME_UI_STANDARD_VOLUME |
+                   RECOMP_RUNTIME_UI_STANDARD_RETURN_TO_LAUNCHER |
+                   RECOMP_RUNTIME_UI_STANDARD_QUIT;
+    cfg.view_modes = RECOMP_RUNTIME_UI_VIEW_MODE_NATIVE | RECOMP_RUNTIME_UI_VIEW_MODE_FIXED_16_9;
+    cfg.native_view_label = "4:3 Standard";
+    cfg.fixed_view_label = "16:9 Widescreen";
+    g_psx_overlay_ui = recomp_runtime_ui_create_standard(&cfg);
+}
+
+static void psx_overlay_toggle(SDL_Keycode opened_by_key) {
+    psx_local_mouse_reset();
+    if (psx_rewind_is_open() || savestate_menu_open)
+        return;
+    psx_overlay_ensure_ui();
+    if (!g_psx_overlay_ui) return;
+    if (g_psx_overlay_open) {
+        recomp_runtime_ui_close(g_psx_overlay_ui);
+        return;
+    }
+    g_psx_overlay_open_key = opened_by_key;
+    recomp_runtime_ui_open(g_psx_overlay_ui);
+}
+
+static void psx_overlay_poll_toggle_buttons(void) {
+    static int was_guide_down = 0;
+    int guide_down = 0;
+    SDL_GameController *h = g_players[0].handle;
+    if (h && SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_GUIDE))
+        guide_down = 1;
+    if (guide_down && !was_guide_down && !psx_rewind_is_open() && !savestate_menu_open)
+        psx_overlay_toggle(0);
+    was_guide_down = guide_down;
+}
+
+static void psx_overlay_host_pause_loop(void) {
+    psx_local_mouse_begin(sdl_window, false);
+    psx_local_mouse_reset();
+    freeze_heartbeat_set_paused(1);
+    while (g_psx_overlay_open && g_psx_overlay_ui) {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            (void)psx_local_mouse_event(ev);
+            if (sdl_close_requested(ev)) {
+                psx_crash_trace_set_exit_origin("sdl_window_close");
+                shutdown_runtime();
+                std::exit(0);
+            } else if (ev.type == SDL_CONTROLLERDEVICEADDED) {
+                refresh_player_devices();
+            } else if (ev.type == SDL_CONTROLLERDEVICEREMOVED) {
+                close_controller();
+                refresh_player_devices();
+            } else if (ev.type == SDL_KEYDOWN) {
+#if defined(PSX_SDL3)
+                const SDL_Keycode key = ev.key.key;
+                const int repeat = ev.key.repeat ? 1 : 0;
+#else
+                const SDL_Keycode key = ev.key.keysym.sym;
+                const int repeat = ev.key.repeat ? 1 : 0;
+#endif
+                if (repeat && key == g_psx_overlay_open_key)
+                    continue;
+                if (key == SDLK_ESCAPE) {
+                    recomp_runtime_ui_handle_input(g_psx_overlay_ui, RECOMP_RUNTIME_UI_INPUT_BACK, 1, repeat);
+                } else if (key == SDLK_UP) {
+                    recomp_runtime_ui_handle_input(g_psx_overlay_ui, RECOMP_RUNTIME_UI_INPUT_UP, 1, repeat);
+                } else if (key == SDLK_DOWN) {
+                    recomp_runtime_ui_handle_input(g_psx_overlay_ui, RECOMP_RUNTIME_UI_INPUT_DOWN, 1, repeat);
+                } else if (key == SDLK_LEFT) {
+                    recomp_runtime_ui_handle_input(g_psx_overlay_ui, RECOMP_RUNTIME_UI_INPUT_LEFT, 1, repeat);
+                } else if (key == SDLK_RIGHT) {
+                    recomp_runtime_ui_handle_input(g_psx_overlay_ui, RECOMP_RUNTIME_UI_INPUT_RIGHT, 1, repeat);
+                } else if (key == SDLK_RETURN || key == SDLK_SPACE) {
+                    recomp_runtime_ui_handle_input(g_psx_overlay_ui, RECOMP_RUNTIME_UI_INPUT_ACCEPT, 1, repeat);
+                }
+                psx_overlay_sync_pixels();
+            } else if (ev.type == SDL_KEYUP) {
+#if defined(PSX_SDL3)
+                const SDL_Keycode key = ev.key.key;
+#else
+                const SDL_Keycode key = ev.key.keysym.sym;
+#endif
+                if (g_psx_overlay_open_key == key)
+                    g_psx_overlay_open_key = 0;
+            }
+        }
+
+        /* Poll gamepad navigation inside overlay */
+        static int prev_a, prev_b, prev_guide;
+        static int held_dir, last_step_ms;
+        int up = 0, down = 0, left = 0, right = 0, btn_a = 0, btn_b = 0, btn_guide = 0;
+        SDL_GameController *h = g_players[0].handle;
+        if (h) {
+            const Sint16 lx = SDL_GameControllerGetAxis(h, SDL_CONTROLLER_AXIS_LEFTX);
+            const Sint16 ly = SDL_GameControllerGetAxis(h, SDL_CONTROLLER_AXIS_LEFTY);
+            const int dz = 16000;
+            if (SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_DPAD_UP) || ly < -dz)
+                up = 1;
+            if (SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_DPAD_DOWN) || ly > dz)
+                down = 1;
+            if (SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_DPAD_LEFT) || lx < -dz)
+                left = 1;
+            if (SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_DPAD_RIGHT) || lx > dz)
+                right = 1;
+            if (SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_A))
+                btn_a = 1;
+            if (SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_B))
+                btn_b = 1;
+            if (SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_GUIDE))
+                btn_guide = 1;
+        }
+
+        if (btn_guide && !prev_guide) {
+            recomp_runtime_ui_handle_input(g_psx_overlay_ui, RECOMP_RUNTIME_UI_INPUT_TOGGLE, 1, 0);
+            psx_overlay_sync_pixels();
+        } else if (btn_b && !prev_b) {
+            recomp_runtime_ui_handle_input(g_psx_overlay_ui, RECOMP_RUNTIME_UI_INPUT_BACK, 1, 0);
+            psx_overlay_sync_pixels();
+        } else if (btn_a && !prev_a) {
+            recomp_runtime_ui_handle_input(g_psx_overlay_ui, RECOMP_RUNTIME_UI_INPUT_ACCEPT, 1, 0);
+            psx_overlay_sync_pixels();
+        }
+        prev_a = btn_a;
+        prev_b = btn_b;
+        prev_guide = btn_guide;
+
+        int vert_dir = down ? 1 : up ? -1 : 0;
+        int horiz_dir = right ? 1 : left ? -1 : 0;
+        uint32_t now = (uint32_t)SDL_GetTicks();
+        if (vert_dir != 0) {
+            if (vert_dir != held_dir || (int32_t)(now - (uint32_t)last_step_ms) >= 180) {
+                recomp_runtime_ui_handle_input(g_psx_overlay_ui,
+                    vert_dir > 0 ? RECOMP_RUNTIME_UI_INPUT_DOWN : RECOMP_RUNTIME_UI_INPUT_UP, 1, 0);
+                psx_overlay_sync_pixels();
+                held_dir = vert_dir;
+                last_step_ms = (int)now;
+            }
+        } else if (horiz_dir != 0) {
+            if (horiz_dir != held_dir || (int32_t)(now - (uint32_t)last_step_ms) >= 180) {
+                recomp_runtime_ui_handle_input(g_psx_overlay_ui,
+                    horiz_dir > 0 ? RECOMP_RUNTIME_UI_INPUT_RIGHT : RECOMP_RUNTIME_UI_INPUT_LEFT, 1, 0);
+                psx_overlay_sync_pixels();
+                held_dir = horiz_dir;
+                last_step_ms = (int)now;
+            }
+        } else {
+            held_dir = 0;
+        }
+
+        rewind_pause_present();
+        starvation_watchdog_heartbeat();
+        SDL_Delay(8);
+    }
+    freeze_heartbeat_set_paused(0);
+    savestate_input_guard_arm();
+}
+
 static int savestate_menu_slot = 0;
 static int savestate_menu_ignore_toggle_release = 0;
 static SDL_Keycode savestate_menu_open_key = 0;
@@ -8233,6 +8536,11 @@ static bool drain_host_events() {
                 netplay_soft_exit("netplay_escape");
                 return false;
             }
+            if (!key_repeat && key == SDLK_ESCAPE && !psx_rewind_is_open() && !savestate_menu_open) {
+                psx_local_mouse_reset();
+                psx_overlay_toggle(key);
+                continue;
+            }
 #ifndef PSX_NO_DEBUG_TOOLS
             /* Debug-tools builds: live rendering A/B keys 0-9 (consumed). */
             if (!key_repeat && !(mod & (KMOD_CTRL | KMOD_ALT | KMOD_GUI)) &&
@@ -8337,7 +8645,7 @@ static bool local_mouse_live(int override_word) {
     g.selfcheck_locked = psx_selfcheck_input_locked();
     g.selfcheck_resim = psx_selfcheck_resim_active();
     g.render_pass = g_psx_render_pass_active;
-    g.savestate_menu_open = savestate_menu_open;
+    g.savestate_menu_open = savestate_menu_open || g_psx_overlay_open;
     g.rewind_open = psx_rewind_is_open();
     g.input_guard = savestate_input_guard_active();
     return pad_ext_live(&g) != 0;
@@ -8507,11 +8815,14 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         /* Pump SDL events to prevent window freeze. */
         psx_local_mouse_begin(sdl_window, local_mouse_live(override));
         if (!drain_host_events()) return ep;
+        psx_overlay_poll_toggle_buttons();
         savestate_menu_poll_toggle_buttons();
         rewind_poll_toggle_buttons();
         fast_forward_toggle_poll_buttons();
         psx_rewind_note_frame();
         psx_rewind_present_tick((uint32_t)SDL_GetTicks());
+        if (g_psx_overlay_open)
+            psx_overlay_host_pause_loop();
         if (savestate_menu_open)
             savestate_menu_host_pause_loop();
         if (psx_rewind_is_open())
@@ -8900,6 +9211,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                 psx_local_mouse_begin(sdl_window, local_mouse_live(override));
                 if (!drain_host_events()) return ep;
                 // A hotkey acquired during pacing may open a host menu.
+                if (g_psx_overlay_open) psx_overlay_host_pause_loop();
                 if (savestate_menu_open) savestate_menu_host_pause_loop();
                 if (psx_rewind_is_open()) rewind_host_pause_loop();
                 psx_local_mouse_begin(sdl_window, local_mouse_live(override));
@@ -16812,6 +17124,7 @@ int main(int argc, char** argv) {
     {
         std::filesystem::path settings_path =
             exe_dir_from_argv(argv[0]) / "settings.toml";
+        g_active_settings_path = settings_path;
 #if defined(RECOMP_LAUNCHER)
         g_lnch_settings_path = settings_path;
 #endif
