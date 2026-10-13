@@ -8247,9 +8247,9 @@ static const RecompRuntimeUiItem kOverlayExtraItems[] = {
 static void psx_overlay_ensure_ui(void) {
     if (g_psx_overlay_ui) return;
     static RecompRuntimeUiStandardConfig cfg{};
-    cfg.menu.title = "Settings";
-    cfg.menu.subtitle = "Armored Core";
-    cfg.menu.theme = "psx";
+    cfg.menu.title = "SYSTEM SETUP";
+    cfg.menu.subtitle = "ARMORED CORE // NEST";
+    cfg.menu.theme = "ac";
     cfg.menu.callbacks.context = nullptr;
     cfg.menu.callbacks.get_value = psx_overlay_ui_get_value;
     cfg.menu.callbacks.set_value = psx_overlay_ui_set_value;
@@ -16426,6 +16426,7 @@ namespace {
     {
         if (!gi) return;
         launcher_profile_apply("psx", gi);
+        gi->theme = "ac";
         gi->name = game_name_c;
         gi->region = region_c;
         gi->keybinds_path =

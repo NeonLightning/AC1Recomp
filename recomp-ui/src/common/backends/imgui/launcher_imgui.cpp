@@ -357,6 +357,7 @@ bool download_icon_button(const char* id, float side, bool enabled,
 // g_th moved to external linkage above the anonymous namespace (see note).
 
 LauncherTexture g_boxart, g_pad, g_pad_analog, g_pad_digital, g_brand, g_memcard;
+LauncherTexture g_icon_display, g_icon_graphics, g_icon_audio, g_icon_input, g_icon_system, g_icon_saves, g_icon_hotkeys;
 // Optional platform wordmark (SystemProfile.wordmark_image) — rendered in the
 // header instead of the platform text when the asset is present. Absent => text.
 LauncherTexture g_wordmark;
@@ -1707,20 +1708,72 @@ void eyebrow_tracked(const char* s) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 p = ImGui::GetCursorScreenPos();
     float h = ImGui::GetTextLineHeight();
-    // accent tick (secondary accent — section headings read in the theme's
-    // heading color, distinct from the primary CTA on dual-accent themes)
-    dl->AddRectFilled(ImVec2(p.x, p.y + h*0.12f), ImVec2(p.x + px(3.0f), p.y + h*0.9f),
-                      imcol(th.accent2), px(1.5f));
-    // letter-spaced text
-    float x = p.x + px(10.0f);
+    const bool is_ac = th.scanlines != 0 && th.radius_sm == 0.0f;
+
+    const LauncherTexture* icon = nullptr;
+    const char* tag = nullptr;
+    if (strstr(s, "DISPLAY")) { icon = &g_icon_display; tag = "DISP"; }
+    else if (strstr(s, "GRAPHIC")) { icon = &g_icon_graphics; tag = "GFX"; }
+    else if (strstr(s, "AUDIO")) { icon = &g_icon_audio; tag = "AUD"; }
+    else if (strstr(s, "INPUT") || strstr(s, "CONTROLLER")) { icon = &g_icon_input; tag = "INP"; }
+    else if (strstr(s, "SYSTEM") || strstr(s, "ASSIST")) { icon = &g_icon_system; tag = "SYS"; }
+    else if (strstr(s, "SAVE")) { icon = &g_icon_saves; tag = "SAV"; }
+    else if (strstr(s, "HOTKEY")) { icon = &g_icon_hotkeys; tag = "KEY"; }
+
+    float icon_sz = px(18.0f);
+    if (icon && icon->id) {
+        float bw = icon_sz, bh = icon_sz;
+        float s_factor = (bw / (float)icon->w < bh / (float)icon->h)
+                           ? bw / (float)icon->w : bh / (float)icon->h;
+        ImGui::SetCursorScreenPos(ImVec2(p.x, p.y + (h - icon->h * s_factor) * 0.5f));
+        ImGui::Image(tid(*icon), ImVec2(icon->w * s_factor, icon->h * s_factor));
+        p.x += icon_sz + px(8.0f);
+    } else if (is_ac && tag) {
+        // Procedural Armored Core tactical placeholder icon
+        dl->AddRect(ImVec2(p.x, p.y + px(1.0f)), ImVec2(p.x + icon_sz, p.y + icon_sz + px(1.0f)),
+                    imcol(th.accent2), 0.0f, 0, px(1.0f));
+        dl->AddRectFilled(ImVec2(p.x + px(2.0f), p.y + px(3.0f)),
+                          ImVec2(p.x + icon_sz - px(2.0f), p.y + icon_sz - px(1.0f)),
+                          imcol(th.panel));
+        ImVec2 ts = ImGui::CalcTextSize(tag);
+        dl->AddText(ImVec2(p.x + (icon_sz - ts.x) * 0.5f, p.y + (icon_sz - ts.y) * 0.5f + px(1.0f)),
+                    imcol(th.accent), tag);
+        p.x += icon_sz + px(8.0f);
+    } else {
+        // accent tick (secondary accent — section headings read in the theme's
+        // heading color, distinct from the primary CTA on dual-accent themes)
+        dl->AddRectFilled(ImVec2(p.x, p.y + h*0.12f), ImVec2(p.x + px(3.0f), p.y + h*0.9f),
+                          imcol(th.accent2), px(1.5f));
+        p.x += px(10.0f);
+    }
+
+    float x = p.x;
     ImU32 c = imcol(th.accent2);
+    if (is_ac) {
+        dl->AddText(ImVec2(x, p.y), imcol(th.accent), "// ");
+        x += ImGui::CalcTextSize("// ").x;
+    }
     char buf[2] = {0,0};
     for (const char* q = s; *q; ++q) {
         buf[0] = *q;
         dl->AddText(ImVec2(x, p.y), c, buf);
-        x += ImGui::CalcTextSize(buf).x + px(2.2f);
+        x += ImGui::CalcTextSize(buf).x + px(is_ac ? 1.5f : 2.2f);
+    }
+    if (is_ac) {
+        dl->AddText(ImVec2(x, p.y), imcol(th.accent), " //");
+        x += ImGui::CalcTextSize(" //").x;
     }
     ImGui::Dummy(ImVec2(x - p.x, h));
+
+    if (is_ac) {
+        // Armored Core tactical telemetry underline with amber tick
+        float avail_w = ImGui::GetContentRegionAvail().x;
+        dl->AddLine(ImVec2(p.x, p.y + h + px(3.0f)), ImVec2(p.x + avail_w, p.y + h + px(3.0f)),
+                    imcol(th.border), px(1.0f));
+        dl->AddRectFilled(ImVec2(p.x, p.y + h + px(2.0f)), ImVec2(p.x + px(18.0f), p.y + h + px(4.0f)),
+                          imcol(th.accent));
+        ImGui::Dummy(ImVec2(0, px(4.0f)));
+    }
     ImGui::Spacing();
 }
 
@@ -14744,6 +14797,28 @@ extern "C" LngAction launcher_backend_run(LauncherPlatform* p,
     // memcard.tga is already 32-bit with real alpha (no colorkey backdrop),
     // same as pad_analog.tga/pad_digital.tga above.
     g_memcard = launcher_texture_load(asset("assets/img/memcard.tga").c_str());
+
+    auto load_category_icon = [](const char* base) -> LauncherTexture {
+        const char* dirs[] = { "assets/ui/", "assets/img/", "assets/" };
+        const char* exts[] = { ".png", ".tga" };
+        for (const char* d : dirs) {
+            for (const char* e : exts) {
+                std::string p = asset((std::string(d) + base + e).c_str());
+                LauncherTexture t = launcher_texture_load(p.c_str());
+                if (t.id) return t;
+            }
+        }
+        return {0, 0, 0};
+    };
+    g_icon_display  = load_category_icon("icon_display");
+    g_icon_graphics = load_category_icon("icon_graphics");
+    g_icon_audio    = load_category_icon("icon_audio");
+    g_icon_input    = load_category_icon("icon_input");
+    if (!g_icon_input.id) g_icon_input = load_category_icon("icon_controller");
+    g_icon_system   = load_category_icon("icon_system");
+    g_icon_saves    = load_category_icon("icon_saves");
+    g_icon_hotkeys  = load_category_icon("icon_hotkeys");
+
     /* Country flags come from a bundled sheet on every platform (Segoe UI
      * Emoji has none). A missing sheet is not fatal: the OS provider is
      * asked instead, and where that cannot draw one the UI prints letters. */

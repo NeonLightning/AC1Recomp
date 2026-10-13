@@ -65,3 +65,12 @@ foreach(_PSX_RUNTIME_CONFIG game.toml game_options.toml)
             VERBATIM)
     endif()
 endforeach()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/assets/ui")
+    add_custom_command(TARGET psx-runtime POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/assets/ui"
+            "$<TARGET_FILE_DIR:psx-runtime>/assets/ui"
+        COMMENT "Staging custom UI assets"
+        VERBATIM)
+endif()

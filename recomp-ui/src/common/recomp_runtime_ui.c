@@ -689,6 +689,123 @@ static void render_toast_argb(RecompRuntimeUi *ui, void *pixels, int width,
     #undef RGB8
 }
 
+extern unsigned char* launcher_image_load_rgba(const char* path, int* w, int* h);
+extern void launcher_image_free(unsigned char* pixels);
+
+typedef struct UiIcon {
+    int attempted;
+    int w, h;
+    unsigned char *pixels;
+} UiIcon;
+
+static UiIcon s_img_cursor = {0, 0, 0, NULL};
+static UiIcon s_img_display = {0, 0, 0, NULL};
+static UiIcon s_img_graphics = {0, 0, 0, NULL};
+static UiIcon s_img_audio = {0, 0, 0, NULL};
+static UiIcon s_img_input = {0, 0, 0, NULL};
+static UiIcon s_img_system = {0, 0, 0, NULL};
+static UiIcon s_img_saves = {0, 0, 0, NULL};
+static UiIcon s_img_header = {0, 0, 0, NULL};
+
+static void try_load_icon(UiIcon *icon, const char *base_name) {
+    if (icon->attempted) return;
+    icon->attempted = 1;
+    const char *dirs[] = { "assets/ui/", "assets/img/", "assets/" };
+    const char *exts[] = { ".png", ".tga" };
+    char path[256];
+    for (size_t d = 0; d < sizeof(dirs)/sizeof(dirs[0]); ++d) {
+        for (size_t e = 0; e < sizeof(exts)/sizeof(exts[0]); ++e) {
+            snprintf(path, sizeof(path), "%s%s%s", dirs[d], base_name, exts[e]);
+            int w = 0, h = 0;
+            unsigned char *px = launcher_image_load_rgba(path, &w, &h);
+            if (px && w > 0 && h > 0) {
+                icon->pixels = px;
+                icon->w = w;
+                icon->h = h;
+                return;
+            }
+        }
+    }
+}
+
+static void blit_rgba_scaled(void *dst_pixels, int dst_w, int dst_h, int dst_pitch,
+                             const unsigned char *src_rgba, int src_w, int src_h,
+                             int dx, int dy, int dw, int dh) {
+    if (!src_rgba || src_w <= 0 || src_h <= 0 || dw <= 0 || dh <= 0) return;
+    for (int y = 0; y < dh; ++y) {
+        int py = dy + y;
+        if (py < 0 || py >= dst_h) continue;
+        int sy = (y * src_h) / dh;
+        if (sy >= src_h) sy = src_h - 1;
+        uint32_t *dst_row = (uint32_t *)((unsigned char *)dst_pixels + py * dst_pitch);
+        const unsigned char *src_row = src_rgba + (size_t)sy * (size_t)src_w * 4u;
+        for (int x = 0; x < dw; ++x) {
+            int px_x = dx + x;
+            if (px_x < 0 || px_x >= dst_w) continue;
+            int sx = (x * src_w) / dw;
+            if (sx >= src_w) sx = src_w - 1;
+            const unsigned char *p = src_row + (size_t)sx * 4u;
+            unsigned sa = p[3];
+            if (sa == 0) continue;
+            uint32_t col = ((uint32_t)p[0] << 16) | ((uint32_t)p[1] << 8) | (uint32_t)p[2];
+            dst_row[px_x] = (sa == 255) ? (0xff000000u | col) : blend_pixel(dst_row[px_x], col, sa);
+        }
+    }
+}
+
+static void draw_placeholder_icon(void *pixels, int width, int height, int pitch,
+                                  const char *type, int x, int y, int sz, int scale,
+                                  uint32_t color) {
+    if (same_text(type, "Display")) {
+        outline(pixels, width, height, pitch, x, y, sz, sz - 2 * scale, scale, color);
+        rect(pixels, width, height, pitch, x + 2 * scale, y + (sz - 2 * scale) / 2, sz - 4 * scale, scale, color, 255);
+        rect(pixels, width, height, pitch, x + sz / 2 - scale, y + sz - 2 * scale, 2 * scale, 2 * scale, color, 255);
+    } else if (same_text(type, "Graphics")) {
+        int mid_x = x + sz / 2;
+        int mid_y = y + sz / 2;
+        outline(pixels, width, height, pitch, x + scale, y + scale, sz - 2 * scale, sz - 2 * scale, scale, color);
+        rect(pixels, width, height, pitch, mid_x, y + scale, scale, sz - 2 * scale, color, 255);
+        rect(pixels, width, height, pitch, x + scale, mid_y, sz - 2 * scale, scale, color, 255);
+    } else if (same_text(type, "Audio")) {
+        int bw = 2 * scale;
+        int gap = scale;
+        int bx = x + scale;
+        rect(pixels, width, height, pitch, bx, y + sz - 3 * scale, bw, 3 * scale, color, 255);
+        rect(pixels, width, height, pitch, bx + bw + gap, y + sz - 6 * scale, bw, 6 * scale, color, 255);
+        rect(pixels, width, height, pitch, bx + 2 * (bw + gap), y + sz - 9 * scale, bw, 9 * scale, color, 255);
+    } else if (same_text(type, "Input")) {
+        int mid_x = x + sz / 2;
+        int mid_y = y + sz / 2;
+        rect(pixels, width, height, pitch, mid_x - scale / 2, y, scale, sz, color, 255);
+        rect(pixels, width, height, pitch, x, mid_y - scale / 2, sz, scale, color, 255);
+    } else if (same_text(type, "System")) {
+        outline(pixels, width, height, pitch, x + scale, y + scale, sz - 2 * scale, sz - 2 * scale, scale, color);
+        rect(pixels, width, height, pitch, x + sz / 3, y + sz / 3, sz / 3, sz / 3, color, 255);
+    } else if (same_text(type, "Saves")) {
+        outline(pixels, width, height, pitch, x + scale, y, sz - 2 * scale, sz, scale, color);
+        rect(pixels, width, height, pitch, x + 2 * scale, y + sz - 3 * scale, sz - 4 * scale, 2 * scale, color, 255);
+    } else {
+        int mid_y = y + sz / 2;
+        for (int i = 0; i < 3; ++i) {
+            rect(pixels, width, height, pitch, x + i * scale, mid_y - (2 - i) * scale, scale, 2 * (2 - i) * scale + scale, color, 255);
+        }
+    }
+}
+
+static void draw_cursor(void *pixels, int width, int height, int pitch,
+                        int x, int y, int sz, int scale, uint32_t color) {
+    try_load_icon(&s_img_cursor, "cursor");
+    if (s_img_cursor.pixels) {
+        blit_rgba_scaled(pixels, width, height, pitch, s_img_cursor.pixels,
+                         s_img_cursor.w, s_img_cursor.h, x, y, sz, sz);
+    } else {
+        int half = sz / 2;
+        for (int i = 0; i <= half; ++i) {
+            rect(pixels, width, height, pitch, x + i, y + half - i, scale, 2 * i + scale, color, 255);
+        }
+    }
+}
+
 void recomp_runtime_ui_render_argb8888(RecompRuntimeUi *ui, void *pixels,
                                        int width, int height, int pitch) {
     if (!ui || !pixels || width <= 0 || height <= 0 || pitch < width * 4) return;
@@ -711,7 +828,8 @@ void recomp_runtime_ui_render_argb8888(RecompRuntimeUi *ui, void *pixels,
                      ((uint32_t)((c).g * 255.0f) << 8) | \
                      (uint32_t)((c).b * 255.0f))
     const uint32_t white = RGB8(theme.text), muted = RGB8(theme.text_muted);
-    const uint32_t accent = RGB8(theme.accent2), panel = RGB8(theme.panel);
+    const uint32_t accent = RGB8(theme.accent), accent2 = RGB8(theme.accent2);
+    const uint32_t panel = RGB8(theme.panel);
     const uint32_t selected = RGB8(theme.control_hovered);
     const uint32_t disabled = RGB8(theme.text_muted);
     const uint32_t border = RGB8(theme.border);
@@ -722,39 +840,66 @@ void recomp_runtime_ui_render_argb8888(RecompRuntimeUi *ui, void *pixels,
          (unsigned)(dim > 255.0f ? 255.0f : dim));
     rect(pixels,width,height,pitch,panel_x,panel_y,panel_w,panel_h,panel,
          (unsigned)(238.0f * ui->opacity));
-    outline(pixels,width,height,pitch,panel_x,panel_y,panel_w,panel_h,
-            scale,accent);
-    const char *title = ui->config.title ? ui->config.title : "Settings";
+    outline(pixels,width,height,pitch,panel_x,panel_y,panel_w,panel_h,scale,border);
+    outline(pixels,width,height,pitch,panel_x + scale,panel_y + scale,panel_w - 2*scale,panel_h - 2*scale,scale,border);
+
+    // Tactical Armored Core corner brackets
+    rect(pixels, width, height, pitch, panel_x, panel_y, 14 * scale, 2 * scale, accent, 255);
+    rect(pixels, width, height, pitch, panel_x, panel_y, 2 * scale, 14 * scale, accent, 255);
+    rect(pixels, width, height, pitch, panel_x + panel_w - 14 * scale, panel_y, 14 * scale, 2 * scale, accent, 255);
+    rect(pixels, width, height, pitch, panel_x + panel_w - 2 * scale, panel_y, 2 * scale, 14 * scale, accent, 255);
+    rect(pixels, width, height, pitch, panel_x, panel_y + panel_h - 2 * scale, 14 * scale, 2 * scale, accent, 255);
+    rect(pixels, width, height, pitch, panel_x, panel_y + panel_h - 14 * scale, 2 * scale, 14 * scale, accent, 255);
+    rect(pixels, width, height, pitch, panel_x + panel_w - 14 * scale, panel_y + panel_h - 2 * scale, 14 * scale, 2 * scale, accent, 255);
+    rect(pixels, width, height, pitch, panel_x + panel_w - 2 * scale, panel_y + panel_h - 14 * scale, 2 * scale, 14 * scale, accent, 255);
+
+    const char *title = ui->config.title ? ui->config.title : "SYSTEM SETUP";
     const char *subtitle = ui->config.subtitle;
     char breadcrumb[256];
     if (ui->in_section && ui->page[0]) {
-        /* Inside a sub-page the breadcrumb is more useful than the subtitle. */
         recomp_runtime_ui_page_title(ui, breadcrumb, sizeof(breadcrumb));
         subtitle = breadcrumb;
     }
+
+    try_load_icon(&s_img_header, "panel_header");
+    int header_text_y = panel_y + pad;
+    if (s_img_header.pixels) {
+        int hdr_h = 16 * scale;
+        int hdr_w = (s_img_header.w * hdr_h) / s_img_header.h;
+        if (hdr_w > panel_w - pad * 2) hdr_w = panel_w - pad * 2;
+        blit_rgba_scaled(pixels, width, height, pitch, s_img_header.pixels, s_img_header.w, s_img_header.h,
+                         panel_x + pad, panel_y + pad, hdr_w, hdr_h);
+        header_text_y += hdr_h + 3 * scale;
+    }
+
     const int title_w = text_width(title, scale);
     const int subtitle_w = text_width(subtitle, scale);
     const int header_inner_w = panel_w - pad * 2;
     const int stacked_header = subtitle && subtitle[0] &&
         title_w + subtitle_w + 4 * scale > header_inner_w;
-    draw_text(pixels,width,height,pitch,panel_x+pad,panel_y+pad,scale,accent,
+    draw_text(pixels,width,height,pitch,panel_x+pad,header_text_y,scale,accent,
               title,panel_x+panel_w-pad);
     if (subtitle && subtitle[0]) {
-        const int subtitle_y = panel_y + pad +
-            (stacked_header ? 10 * scale : 0);
+        const int subtitle_y = header_text_y + (stacked_header ? 10 * scale : 0);
         int subtitle_x = panel_x + panel_w - pad - subtitle_w;
         if (subtitle_x < panel_x + pad) subtitle_x = panel_x + pad;
         draw_text(pixels,width,height,pitch,subtitle_x,
-                  subtitle_y,scale,muted,subtitle,panel_x+panel_w-pad);
+                  subtitle_y,scale,accent2,subtitle,panel_x+panel_w-pad);
     }
-    const int header_extra = stacked_header ? 10 * scale : 0;
+    const int header_extra = (stacked_header ? 10 * scale : 0) + (s_img_header.pixels ? 18 * scale : 0);
     rect(pixels,width,height,pitch,panel_x+pad,
          panel_y+24*scale+header_extra,
          panel_w-pad*2,scale,border,255);
+    rect(pixels,width,height,pitch,panel_x+pad,
+         panel_y+23*scale+header_extra,
+         14*scale,3*scale,accent,255);
+    rect(pixels,width,height,pitch,panel_x+panel_w-pad-14*scale,
+         panel_y+23*scale+header_extra,
+         14*scale,3*scale,accent,255);
 
     int list_y = panel_y + 32 * scale + header_extra;
     int footer_y = panel_y + panel_h - 28 * scale;
-    int row_h = 15 * scale;
+    int row_h = 16 * scale;
     int visible = (footer_y - list_y) / row_h;
     if (visible < 1) visible = 1;
     size_t count = ui->in_section ? recomp_runtime_ui_page_entry_count(ui)
@@ -765,9 +910,19 @@ void recomp_runtime_ui_render_argb8888(RecompRuntimeUi *ui, void *pixels,
     for (int line = 0; line < visible && first + (size_t)line < count; ++line) {
         size_t index = first + (size_t)line;
         int y = list_y + line * row_h;
-        if (index == selection)
+        if (index == selection) {
             rect(pixels,width,height,pitch,panel_x+pad/2,y-3*scale,
-                 panel_w-pad,row_h,selected,255);
+                 panel_w-pad,row_h,selected,220);
+            outline(pixels,width,height,pitch,panel_x+pad/2,y-3*scale,
+                    panel_w-pad,row_h,scale,accent);
+            rect(pixels,width,height,pitch,panel_x+pad/2,y-3*scale,
+                 3*scale,row_h,accent,255);
+            rect(pixels,width,height,pitch,panel_x+panel_w-pad/2-3*scale,y-3*scale,
+                 3*scale,row_h,accent,255);
+            draw_cursor(pixels,width,height,pitch,
+                        panel_x+pad/2+6*scale,y-3*scale+(row_h-8*scale)/2,
+                        8*scale,scale,accent);
+        }
         char folder[96] = "";
         const RecompRuntimeUiItem *item = ui->in_section
             ? recomp_runtime_ui_page_entry(ui, index, folder, sizeof(folder))
@@ -775,11 +930,28 @@ void recomp_runtime_ui_render_argb8888(RecompRuntimeUi *ui, void *pixels,
         if (!ui->in_section || !item) {
             /* Section on the top level, or a folder row inside a page. */
             const char *name = ui->in_section ? folder : ui->sections[index];
-            draw_text(pixels,width,height,pitch,panel_x+pad,y,scale,
+            UiIcon *ico = NULL;
+            if (same_text(name, "Display")) { try_load_icon(&s_img_display, "icon_display"); ico = &s_img_display; }
+            else if (same_text(name, "Graphics")) { try_load_icon(&s_img_graphics, "icon_graphics"); ico = &s_img_graphics; }
+            else if (same_text(name, "Audio")) { try_load_icon(&s_img_audio, "icon_audio"); ico = &s_img_audio; }
+            else if (same_text(name, "Input")) { try_load_icon(&s_img_input, "icon_input"); ico = &s_img_input; }
+            else if (same_text(name, "System")) { try_load_icon(&s_img_system, "icon_system"); ico = &s_img_system; }
+            else if (same_text(name, "Saves")) { try_load_icon(&s_img_saves, "icon_saves"); ico = &s_img_saves; }
+
+            int icon_sz = 9 * scale;
+            int icon_x = panel_x + pad / 2 + 18 * scale;
+            int icon_y = y - 3 * scale + (row_h - icon_sz) / 2;
+            if (ico && ico->pixels) {
+                blit_rgba_scaled(pixels, width, height, pitch, ico->pixels, ico->w, ico->h, icon_x, icon_y, icon_sz, icon_sz);
+            } else {
+                draw_placeholder_icon(pixels, width, height, pitch, name, icon_x, icon_y, icon_sz, scale, index == selection ? accent : muted);
+            }
+            int text_x = icon_x + icon_sz + 6 * scale;
+            draw_text(pixels,width,height,pitch,text_x,y,scale,
                       index == selection ? white : muted,name,
-                      panel_x+panel_w-pad-12*scale);
-            draw_text(pixels,width,height,pitch,panel_x+panel_w-pad-5*scale,y,
-                      scale,index == selection ? accent : muted,">",
+                      panel_x+panel_w-pad-24*scale);
+            draw_text(pixels,width,height,pitch,panel_x+panel_w-pad-16*scale,y,
+                      scale,index == selection ? accent : muted,"[>]",
                       panel_x+panel_w-pad);
         } else {
             int enabled = recomp_runtime_ui_item_enabled(ui, item);
@@ -788,21 +960,25 @@ void recomp_runtime_ui_render_argb8888(RecompRuntimeUi *ui, void *pixels,
             char value[96];
             item_value(ui, item, value, sizeof(value));
             int value_w = text_width(value, scale);
-            draw_text(pixels,width,height,pitch,panel_x+pad,y,scale,color,
+            int text_x = panel_x + pad / 2 + 18 * scale;
+            draw_text(pixels,width,height,pitch,text_x,y,scale,
+                      index == selection ? accent : muted, "//", text_x + 12*scale);
+            text_x += 12 * scale;
+            draw_text(pixels,width,height,pitch,text_x,y,scale,color,
                       item->label,panel_x+panel_w-pad-value_w-8*scale);
             draw_text(pixels,width,height,pitch,panel_x+panel_w-pad-value_w,y,
-                      scale,index == selection && enabled ? accent : color,
+                      scale,index == selection && enabled ? accent : (enabled ? accent2 : color),
                       value,panel_x+panel_w-pad);
         }
     }
 
-    const char *help = "UP/DOWN SELECT  LEFT/RIGHT CHANGE  ENTER ACCEPT";
+    const char *help = "[ UP/DN SELECT  LT/RT CHANGE  ENTER ACCEPT ]";
     if (ui->in_section) {
         char folder[96];
         const RecompRuntimeUiItem *item = recomp_runtime_ui_page_entry(
             ui, ui->row_index, folder, sizeof(folder));
         if (item && item->description && *item->description) help = item->description;
-        else if (!item && folder[0]) help = "ENTER OPEN  ESC BACK";
+        else if (!item && folder[0]) help = "[ ENTER OPEN  ESC BACK ]";
     }
     rect(pixels,width,height,pitch,panel_x+pad,footer_y-4*scale,
          panel_w-pad*2,scale,border,255);

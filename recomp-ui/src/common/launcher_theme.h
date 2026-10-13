@@ -278,12 +278,41 @@ static inline LauncherTheme launcher_theme_gbc(void) {
     return t;
 }
 
+// "Armored Core" theme. The industrial Raven / Nest cockpit aesthetic:
+// deep charcoal-black ground, signature AC amber accent (#FF9E00), tactical
+// cyan secondary accent (#00E5FF), military slate text, and crisp CRT scanlines.
+static inline LauncherTheme launcher_theme_ac(void) {
+    LauncherTheme t = launcher_theme_default();
+    t.background      = lng_rgba(0.027f, 0.035f, 0.051f, 1.0f); // #07090D deep Raven black
+    t.background2     = lng_rgba(0.051f, 0.067f, 0.090f, 1.0f); // #0D1117
+    t.panel           = lng_rgba(0.051f, 0.071f, 0.098f, 1.0f); // #0D1219 tactical dark panel
+    t.panel_hovered   = lng_rgba(0.086f, 0.114f, 0.149f, 1.0f); // #161D26
+    t.control         = lng_rgba(0.071f, 0.094f, 0.125f, 1.0f); // #121820 button
+    t.control_hovered = lng_rgba(0.220f, 0.165f, 0.031f, 1.0f); // #382A08 amber glow hover
+    t.border          = lng_rgba(0.180f, 0.239f, 0.310f, 1.0f); // #2E3D4F industrial steel frame
+    t.accent          = lng_rgba(1.000f, 0.620f, 0.000f, 1.0f); // #FF9E00 Armored Core amber
+    t.accent_dim      = lng_rgba(0.776f, 0.471f, 0.000f, 1.0f); // #C67800 pressed/gradient
+    t.accent_text     = lng_rgba(0.030f, 0.030f, 0.030f, 1.0f); // bold high contrast on amber
+    t.accent2         = lng_rgba(0.000f, 0.898f, 1.000f, 1.0f); // #00E5FF tactical cyan
+    t.text            = lng_rgba(0.929f, 0.957f, 0.980f, 1.0f); // #EDF4FA HUD readout white
+    t.text_muted      = lng_rgba(0.416f, 0.502f, 0.596f, 1.0f); // #6A8098 tactical telemetry slate
+    t.good            = lng_rgba(0.000f, 0.941f, 0.627f, 1.0f); // #00F0A0 target lock green
+    t.warn            = lng_rgba(1.000f, 0.200f, 0.067f, 1.0f); // #FF3311 warning red-orange
+    t.focus_ring      = lng_rgba(1.000f, 0.620f, 0.000f, 1.0f); // amber focus
+    t.radius_sm       = 0.0f;                                     // sharp industrial corners
+    t.radius_lg       = 0.0f;                                     // sharp industrial corners
+    t.scanlines       = 1;
+    return t;
+}
+
 // Pick a built-in theme by name ("psx" -> PlayStation, "gba" -> Game Boy
 // Advance, "gbc" -> Game Boy Color, "gb" -> Game Boy (DMG), "n64" -> Nintendo
 // 64, "nes" -> Nintendo Entertainment System, "genesis" -> Sega Genesis;
 // anything else -> default CRT). Note the "gb*" order: match "gba" and "gbc"
 // (3rd char) BEFORE the bare "gb" fallback.
 static inline LauncherTheme launcher_theme_by_name(const char* name) {
+    if (name && ((name[0] == 'a' || name[0] == 'A') && (name[1] == 'c' || name[1] == 'C')))
+        return launcher_theme_ac();
     if (name && (name[0] == 'p' || name[0] == 'P') &&
         (name[1] == 's' || name[1] == 'S'))
         return launcher_theme_psx();
