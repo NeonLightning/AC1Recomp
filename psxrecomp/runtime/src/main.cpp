@@ -8367,6 +8367,13 @@ static void psx_overlay_host_pause_loop(void) {
     psx_local_mouse_begin(sdl_window, false);
     psx_local_mouse_reset();
     freeze_heartbeat_set_paused(1);
+    /* Buttons held at open time (e.g. the Guide press that opened us) must not count as new presses. */
+    int prev_a = 0, prev_b = 0, prev_guide = 0;
+    if (SDL_GameController *h0 = g_players[0].handle) {
+        prev_a = SDL_GameControllerGetButton(h0, SDL_CONTROLLER_BUTTON_A);
+        prev_b = SDL_GameControllerGetButton(h0, SDL_CONTROLLER_BUTTON_B);
+        prev_guide = SDL_GameControllerGetButton(h0, SDL_CONTROLLER_BUTTON_GUIDE);
+    }
     while (g_psx_overlay_open && g_psx_overlay_ui) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
@@ -8416,7 +8423,6 @@ static void psx_overlay_host_pause_loop(void) {
         }
 
         /* Poll gamepad navigation inside overlay */
-        static int prev_a, prev_b, prev_guide;
         static int held_dir, last_step_ms;
         int up = 0, down = 0, left = 0, right = 0, btn_a = 0, btn_b = 0, btn_guide = 0;
         SDL_GameController *h = g_players[0].handle;
