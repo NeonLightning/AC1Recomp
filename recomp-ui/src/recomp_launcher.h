@@ -41,6 +41,8 @@ extern "C" {
 #define RECOMP_LAUNCHER_HAS_MULTITAP_ANALOG 1
 /* Host may #ifdef this when reading Settings.dual_analog_buttons. */
 #define RECOMP_LAUNCHER_HAS_DUAL_ANALOG_BUTTONS 1
+/* Host may #ifdef this when reading Settings.dual_analog_duplicate_face. */
+#define RECOMP_LAUNCHER_HAS_DUAL_ANALOG_DUPLICATE_FACE 1
 /* Host may #ifdef this when reading Settings.rewind_depth. */
 #define RECOMP_LAUNCHER_HAS_REWIND_DEPTH 1
 /* Host may #ifdef this when reading Settings.rewind_interval. */
@@ -1574,6 +1576,8 @@ struct RecompLauncherCSettings {
     int  quality_base;
     /* Digital-mode dual-stick button mapping; 0 off, 1 on. */
     int  dual_analog_buttons;
+    /* Duplicate face buttons onto shoulder buttons in dual analog mode; 0 off, 1 on. */
+    int  dual_analog_duplicate_face;
 };
 #define RECOMP_LAUNCHER_HAS_ZAPPER_SETTINGS 1
 

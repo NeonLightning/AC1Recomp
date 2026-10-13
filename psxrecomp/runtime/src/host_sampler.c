@@ -154,8 +154,21 @@ void host_sampler_start(void) {
     s_supported = 1;
 }
 
+void host_sampler_stop(void) {
+    struct itimerval it;
+    memset(&it, 0, sizeof it);
+    setitimer(ITIMER_PROF, &it, NULL);
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = SIG_DFL;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGPROF, &sa, NULL);
+    s_supported = 0;
+}
+
 #else
 void host_sampler_start(void) {}
+void host_sampler_stop(void) {}
 #endif
 
 int host_sampler_supported(void) { return s_supported; }

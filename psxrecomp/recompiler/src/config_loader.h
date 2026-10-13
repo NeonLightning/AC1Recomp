@@ -1628,6 +1628,9 @@ struct UserSettings {
     // titles such as AC1. This maps stick directions to ordinary PSX buttons;
     // it does not emulate analog-sensitive game logic.
     bool has_dual_analog_buttons = false; bool dual_analog_buttons = false;
+    // [controller] dual_analog_duplicate_face: Duplicate face buttons to shoulder
+    // buttons (L1=Triangle, R1=Cross, L2=Circle, R2=Square) during dual analog.
+    bool has_dual_analog_duplicate_face = false; bool dual_analog_duplicate_face = false;
     // Localization: the launcher's chosen language code (feeds RuntimeConfig
     // .language / g_lang). "off"/"jp"/"" = untranslated native game. Persisted to
     // settings.toml [localization].language.

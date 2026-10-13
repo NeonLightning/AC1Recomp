@@ -3201,6 +3201,10 @@ UserSettings load_user_settings(const fs::path& path) {
             s.dual_analog_buttons = toml::find<bool>(ct, "dual_analog_buttons");
             s.has_dual_analog_buttons = true;
         });
+        if (ct.contains("dual_analog_duplicate_face")) try_get([&]{
+            s.dual_analog_duplicate_face = toml::find<bool>(ct, "dual_analog_duplicate_face");
+            s.has_dual_analog_duplicate_face = true;
+        });
         if (ct.contains("deadzone")) try_get([&]{
             const auto n = toml::find<int64_t>(ct, "deadzone");
             if (n >= 0 && n <= 32767) {
@@ -3429,6 +3433,9 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
             if (s.has_dual_analog_buttons)
                 f << "dual_analog_buttons = "
                   << (s.dual_analog_buttons ? "true" : "false") << "\n";
+            if (s.has_dual_analog_duplicate_face)
+                f << "dual_analog_duplicate_face = "
+                  << (s.dual_analog_duplicate_face ? "true" : "false") << "\n";
             /* Keep a global deadzone= for older readers (mirrors P1). */
             if (s.has_deadzone || s.has_p_deadzone[0])
                 f << "deadzone  = "

@@ -4578,7 +4578,6 @@ void panel_audio_draw(LauncherModel* m, const LauncherTheme* th) {
 int avail_input(const LauncherModel* m) {
     return launcher_model_multitap_available(m) ||
            launcher_model_multitap_analog_available(m) ||
-           launcher_model_dual_analog_buttons_available(m) ||
            launcher_model_virtual_stylus_available(m);
 }
 void draw_input_controls(LauncherModel* m, const LauncherTheme& th) {
@@ -4616,26 +4615,6 @@ void draw_input_controls(LauncherModel* m, const LauncherTheme& th) {
                 "Allow DualShock sticks on multitap tap seats (not faithful — "
                 "many titles expect digital taps). Saved to game.toml / "
                 "settings. Netplay hosts can enforce this for the lobby.");
-            ImGui::PopTextWrapPos();
-            ImGui::EndTooltip();
-        }
-    }
-    if (launcher_model_dual_analog_buttons_available(m)) {
-        if (previous_row)
-            ImGui::Dummy(ImVec2(0, px(th.spacing_sm)));
-        bool on = launcher_model_dual_analog_buttons_enabled(m) != 0;
-        if (ImGui::Checkbox("Dual-stick buttons", &on) &&
-            (on ? 1 : 0) != launcher_model_dual_analog_buttons_enabled(m))
-            launcher_model_toggle_dual_analog_buttons(m);
-        previous_row = true;
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) {
-            ImGui::BeginTooltip();
-            ImGui::PushTextWrapPos(px(320));
-            ImGui::TextUnformatted(
-                "Digital approximation: left stick maps to D-pad up/down and "
-                "L1/R1; right stick maps to D-pad left/right and L2/R2. "
-                "It does not reproduce analog smoothing; in-game button "
-                "remapping may change the actions these inputs trigger.");
             ImGui::PopTextWrapPos();
             ImGui::EndTooltip();
         }
@@ -5754,6 +5733,52 @@ void draw_controller_config_view(LauncherModel* m, const LauncherTheme& th) {
             if (ImGui::SliderInt("##dz", &dz, 0, hi, "%d%%",
                                  ImGuiSliderFlags_AlwaysClamp))
                 launcher_model_set_deadzone(m, p, dz);
+        }
+
+        if (cfg_psx && launcher_model_dual_analog_buttons_available(m)) {
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            bool da_on = launcher_model_dual_analog_buttons_enabled(m) != 0;
+            if (ImGui::Checkbox("Dual analog mode", &da_on)) {
+                launcher_model_toggle_dual_analog_buttons(m);
+            }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) {
+                ImGui::BeginTooltip();
+                ImGui::PushTextWrapPos(px(320));
+                ImGui::TextUnformatted(
+                    "Left stick: Forward/Back (D-Pad Up/Down) & Strafe (L1/R1)\n"
+                    "Right stick: Aim Up/Down (L2/R2) & Turn (D-Pad Left/Right)");
+                ImGui::PopTextWrapPos();
+                ImGui::EndTooltip();
+            }
+
+            if (da_on) {
+                ImGui::Spacing();
+                ImGui::PushStyleColor(ImGuiCol_Text, col(th.accent2));
+                ImGui::TextUnformatted("Dual Analog Shoulder Mapping Legend:");
+                ImGui::PopStyleColor();
+                ImGui::PushStyleColor(ImGuiCol_Text, col(th.text_muted));
+                ImGui::TextUnformatted("  L1 -> Triangle  |  R1 -> Cross (X)\n"
+                                       "  L2 -> Circle    |  R2 -> Square");
+                ImGui::PopStyleColor();
+                ImGui::Spacing();
+
+                bool dup_on = launcher_model_dual_analog_duplicate_face_enabled(m) != 0;
+                if (ImGui::Checkbox("Duplicate face buttons on shoulders (L2=Circle, R2=Square, R1=Cross, L1=Triangle)", &dup_on)) {
+                    launcher_model_toggle_dual_analog_duplicate_face(m);
+                }
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) {
+                    ImGui::BeginTooltip();
+                    ImGui::PushTextWrapPos(px(320));
+                    ImGui::TextUnformatted(
+                        "Sets L2 to duplicate Circle, R2 to duplicate Square, "
+                        "R1 to duplicate Cross (X), and L1 to duplicate Triangle.");
+                    ImGui::PopTextWrapPos();
+                    ImGui::EndTooltip();
+                }
+            }
         }
     } end_panel();
 

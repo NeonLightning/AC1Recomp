@@ -1411,6 +1411,9 @@ static void apply_internal_resolution(int display_px_h) {
     if (g_video_internal_res != PSX_IR_UNSET) return g_video_internal_res;
     return psx_ir_from_supersampling(g_video_scale < 1 ? 1 : g_video_scale, g_video_ref_lines);
 }
+static std::string   g_saved_argv0;
+static bool          g_fast_boot      = false;
+static bool          g_bios_hle       = false;
 static std::string   g_bezel_path;      /* mod-owned OpenGL margin artwork */
 static int           g_fullscreen     = 0;  /* tri-state: 0 windowed, 1 borderless (desktop)
                                               * fullscreen, 2 exclusive fullscreen */
@@ -4000,6 +4003,7 @@ static void shutdown_runtime(void) {
     if (s_drc_ready) { rab_free(&s_drc); s_drc_ready = false; }
     close_controller();
     debug_server_shutdown();
+    host_sampler_stop();
 }
 
 /* Tear down the game window/GL/audio after a lobby soft-return. Leaves SDL
@@ -4786,6 +4790,7 @@ static int controller_deadzone = 3277;
 /* [controller] anti_deadzone (game.toml). 0 = off, the historical behaviour. */
 static int controller_anti_deadzone = 0;
 static int dual_analog_buttons = 0;
+static int dual_analog_duplicate_face = 0;
 static bool dual_analog_buttons_offered = false;
 static constexpr int kDefaultDeadzoneRaw = 3277;
 static constexpr int kControllerMapN = 24;
@@ -5543,6 +5548,7 @@ static uint16_t controller_pad_buttons(const ControllerMap& map,
     uint16_t buttons = 0xFFFF;  /* all released */
     if (!h) return buttons;
     for (const auto& entry : map) {
+        uint16_t bit = entry.bit;
         uint16_t fold_bit = entry.fold_bit;
         if (dual_analog_buttons && !suppress_stick_axes) {
             if (std::strcmp(entry.ini_name, "ls_left") == 0) fold_bit = PAD_L1;
@@ -5551,6 +5557,13 @@ static uint16_t controller_pad_buttons(const ControllerMap& map,
             else if (std::strcmp(entry.ini_name, "rs_down") == 0) fold_bit = PAD_R2;
             else if (std::strcmp(entry.ini_name, "rs_left") == 0) fold_bit = PAD_LEFT;
             else if (std::strcmp(entry.ini_name, "rs_right") == 0) fold_bit = PAD_RIGHT;
+
+            if (dual_analog_duplicate_face) {
+                if (std::strcmp(entry.ini_name, "l1") == 0) bit = PAD_TRIANGLE;
+                else if (std::strcmp(entry.ini_name, "r1") == 0) bit = PAD_CROSS;
+                else if (std::strcmp(entry.ini_name, "l2") == 0) bit = PAD_CIRCLE;
+                else if (std::strcmp(entry.ini_name, "r2") == 0) bit = PAD_SQUARE;
+            }
         }
         for (const auto& source : entry.sources) {
             if (suppress_stick_axes && source_is_stick_axis(source)) continue;
@@ -5562,8 +5575,8 @@ static uint16_t controller_pad_buttons(const ControllerMap& map,
                 (claimed_buttons & (1u << source.id)))
                 continue;
             if (!controller_source_pressed_h(h, source, deadzone_raw)) continue;
-            if (entry.bit)
-                buttons &= (uint16_t)~entry.bit;
+            if (bit)
+                buttons &= (uint16_t)~bit;
             if (fold_bit && !suppress_stick_axes)
                 buttons &= (uint16_t)~fold_bit;
             break;
@@ -7700,6 +7713,8 @@ static void apply_title_direct_shortcut(const std::string& shortcut,
 
 static void rewind_pause_present(void);
 static int savestate_menu_open = 0;
+static int savestate_menu_slot = 0;
+static int savestate_submit_slot(int slot, int save);
 static std::filesystem::path g_active_settings_path;
 
 static RecompRuntimeUi* g_psx_overlay_ui = nullptr;
@@ -7717,11 +7732,94 @@ static void psx_overlay_sync_pixels(void) {
     psx_savestate_menu_set_external_overlay(1, g_psx_overlay_pixels, 640, 480);
 }
 
+static const char* const kScreenFilterChoices[] = { "Raw", "CRT", "Composite", "Trinitron" };
+static const char* const kVsyncChoices[] = { "Off", "On", "Adaptive" };
+
+static int g_overlay_window_scale = 0;
+
+static int get_current_window_scale(void) {
+    if (g_overlay_window_scale > 0)
+        return g_overlay_window_scale;
+    int width = 0, height = 0;
+    if (sdl_window) {
+        SDL_GetWindowSize(sdl_window, &width, &height);
+    }
+    if (height > 0) {
+        g_overlay_window_scale = std::max(1, std::min(8, (height + 120) / 240));
+    } else if (g_video_win_w > 0) {
+        const int num = g_video_aspect_num > 0 ? g_video_aspect_num : 4;
+        const int den = g_video_aspect_den > 0 ? g_video_aspect_den : 3;
+        int h = (int)((int64_t)g_video_win_w * den / num);
+        g_overlay_window_scale = std::max(1, std::min(8, (h + 120) / 240));
+    } else {
+        g_overlay_window_scale = 3;
+    }
+    return g_overlay_window_scale;
+}
+
+static void psx_overlay_ui_save(void* ctx);
+
+static void psx_relaunch_to_launcher(void) {
+    if (g_psx_overlay_ui) recomp_runtime_ui_close(g_psx_overlay_ui);
+    psx_overlay_ui_save(nullptr);
+    shutdown_runtime();
+    host_sampler_stop();
+    if (g_gl_active) gl_renderer_shutdown();
+    if (g_vk_active) vk_renderer_shutdown();
+    if (sdl_texture) { SDL_DestroyTexture(sdl_texture); sdl_texture = nullptr; }
+    if (sdl_renderer) { SDL_DestroyRenderer(sdl_renderer); sdl_renderer = nullptr; }
+    if (sdl_window) { SDL_DestroyWindow(sdl_window); sdl_window = nullptr; }
+    if (s_headless_gl_window) { SDL_DestroyWindow(s_headless_gl_window); s_headless_gl_window = nullptr; }
+    SDL_Quit();
+
+    if (!g_saved_argv0.empty()) {
+        std::error_code ec;
+        std::filesystem::path p = std::filesystem::absolute(g_saved_argv0, ec);
+        std::string exe = ec ? g_saved_argv0 : p.string();
+#ifdef _WIN32
+        const char* args[] = { exe.c_str(), "--launcher", nullptr };
+        _spawnv(_P_NOWAIT, exe.c_str(), args);
+#else
+        char* args[] = { const_cast<char*>(exe.c_str()), const_cast<char*>("--launcher"), nullptr };
+        execv(exe.c_str(), args);
+#endif
+    }
+    std::exit(0);
+}
+
 static int psx_overlay_ui_get_value(void* ctx, const RecompRuntimeUiItem* item, int* value_out) {
     (void)ctx;
     if (!item || !item->key || !value_out) return 0;
     if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_FULLSCREEN) == 0) {
         *value_out = s_window_fullscreen.mode ? (g_fullscreen ? g_fullscreen : 1) : 0;
+        return 1;
+    }
+    if (std::strcmp(item->key, "display.vsync") == 0) {
+        *value_out = (g_video_vsync == 0) ? 0 : (g_video_vsync == 2) ? 2 : 1;
+        return 1;
+    }
+    if (std::strcmp(item->key, "display.frame_interpolation") == 0) {
+        *value_out = g_frame_interpolation ? 1 : 0;
+        return 1;
+    }
+    if (std::strcmp(item->key, "graphics.skip_fmv") == 0) {
+        *value_out = g_auto_skip_fmv ? 1 : 0;
+        return 1;
+    }
+    if (std::strcmp(item->key, "audio.spu_hq") == 0) {
+        *value_out = g_audio_spu_hq ? 1 : 0;
+        return 1;
+    }
+    if (std::strcmp(item->key, "system.bios_hle") == 0) {
+        *value_out = g_bios_hle ? 1 : 0;
+        return 1;
+    }
+    if (std::strcmp(item->key, "system.rewind_enabled") == 0) {
+        *value_out = g_rewind_enabled ? 1 : 0;
+        return 1;
+    }
+    if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_WINDOW_SCALE) == 0) {
+        *value_out = get_current_window_scale();
         return 1;
     }
     if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_VIEW_MODE) == 0) {
@@ -7730,12 +7828,64 @@ static int psx_overlay_ui_get_value(void* ctx, const RecompRuntimeUiItem* item, 
                          : RECOMP_RUNTIME_UI_VIEW_NATIVE;
         return 1;
     }
+    if (std::strcmp(item->key, "display.scanlines") == 0) {
+        *value_out = g_video_scanlines ? 1 : 0;
+        return 1;
+    }
+    if (std::strcmp(item->key, "display.scanline_strength") == 0) {
+        *value_out = (int)(g_video_scanline_strength * 100.0f + 0.5f);
+        return 1;
+    }
+    if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_RESOLUTION_SCALE) == 0) {
+        *value_out = std::max(1, std::min(8, g_video_scale));
+        return 1;
+    }
+    if (std::strcmp(item->key, "graphics.antialiasing") == 0) {
+        *value_out = g_video_aa ? 1 : 0;
+        return 1;
+    }
     if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_TEXTURE_FILTER) == 0) {
         *value_out = g_video_texfilter ? 1 : 0;
         return 1;
     }
+    if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_FMV_FILTER) == 0) {
+        *value_out = std::max(0, std::min(3, g_video_fmv_filter));
+        return 1;
+    }
+    if (std::strcmp(item->key, "graphics.crt_filter") == 0) {
+        *value_out = std::max(0, std::min(3, g_video_screen));
+        return 1;
+    }
+    if (std::strcmp(item->key, "graphics.geometry_correction") == 0) {
+        *value_out = g_video_geometry_correction ? 1 : 0;
+        return 1;
+    }
+    if (std::strcmp(item->key, "graphics.perspective_texturing") == 0) {
+        *value_out = g_video_perspective_texturing ? 1 : 0;
+        return 1;
+    }
+    if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_AUDIO) == 0) {
+        *value_out = (host_volume_get() > 0) ? 1 : 0;
+        return 1;
+    }
     if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_VOLUME) == 0) {
         *value_out = host_volume_get();
+        return 1;
+    }
+    if (std::strcmp(item->key, "input.dual_analog") == 0) {
+        *value_out = dual_analog_buttons ? 1 : 0;
+        return 1;
+    }
+    if (std::strcmp(item->key, "input.dual_analog_duplicate_face") == 0) {
+        *value_out = dual_analog_duplicate_face ? 1 : 0;
+        return 1;
+    }
+    if (std::strcmp(item->key, "system.fast_boot") == 0) {
+        *value_out = g_fast_boot ? 1 : 0;
+        return 1;
+    }
+    if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_STATE_SLOT) == 0) {
+        *value_out = savestate_menu_slot + 1;
         return 1;
     }
     return 0;
@@ -7751,6 +7901,60 @@ static int psx_overlay_ui_set_value(void* ctx, const RecompRuntimeUiItem* item, 
             host_osd_push(target ? "Fullscreen" : "Windowed", 1200);
         return 1;
     }
+    if (std::strcmp(item->key, "display.vsync") == 0) {
+        g_video_vsync = (value == 0) ? 0 : (value == 2) ? 2 : 1;
+        host_osd_push(g_video_vsync == 0 ? "VSync: Off" : g_video_vsync == 2 ? "VSync: Adaptive" : "VSync: On", 1200);
+        return 1;
+    }
+    if (std::strcmp(item->key, "display.frame_interpolation") == 0) {
+        g_frame_interpolation = value != 0;
+        host_osd_push(g_frame_interpolation ? "Frame interpolation: on" : "Frame interpolation: off", 1200);
+        return 1;
+    }
+    if (std::strcmp(item->key, "graphics.skip_fmv") == 0) {
+        g_auto_skip_fmv = value != 0;
+        host_osd_push(g_auto_skip_fmv ? "Skip FMVs: on" : "Skip FMVs: off", 1200);
+        return 1;
+    }
+    if (std::strcmp(item->key, "audio.spu_hq") == 0) {
+        g_audio_spu_hq = value != 0;
+        spu_shadow_set_enabled(g_audio_spu_hq ? 1 : 0);
+        host_osd_push(g_audio_spu_hq ? "SPU HQ: on" : "SPU HQ: off", 1200);
+        return 1;
+    }
+    if (std::strcmp(item->key, "system.bios_hle") == 0) {
+        g_bios_hle = value != 0;
+        host_osd_push(g_bios_hle ? "HLE BIOS: on" : "HLE BIOS: off", 1200);
+        return 1;
+    }
+    if (std::strcmp(item->key, "system.rewind_enabled") == 0) {
+        g_rewind_enabled = value != 0;
+        psx_rewind_set_enabled(g_rewind_enabled);
+        host_osd_push(g_rewind_enabled ? "Rewind: on" : "Rewind: off", 1200);
+        return 1;
+    }
+    if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_WINDOW_SCALE) == 0) {
+        const int scale = std::max(1, std::min(8, value));
+        g_overlay_window_scale = scale;
+        const int num = g_video_aspect_num > 0 ? g_video_aspect_num : 4;
+        const int den = g_video_aspect_den > 0 ? g_video_aspect_den : 3;
+        int height = 240 * scale;
+        int width = (int)((int64_t)height * num / den);
+        g_video_win_w = width;
+
+        if (s_window_fullscreen.mode || g_fullscreen) {
+            g_fullscreen = 0;
+            psx_window_fullscreen_set(sdl_window, &s_window_fullscreen, 0);
+        }
+        if (sdl_window) {
+            SDL_SetWindowSize(sdl_window, width, height);
+            vk_renderer_notify_window_resize();
+        }
+        char msg[32];
+        std::snprintf(msg, sizeof(msg), "Window scale: %dx", scale);
+        host_osd_push(msg, 1200);
+        return 1;
+    }
     if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_VIEW_MODE) == 0) {
         const int num = (value == RECOMP_RUNTIME_UI_VIEW_FIXED_16_9) ? 16 : 4;
         const int den = (value == RECOMP_RUNTIME_UI_VIEW_FIXED_16_9) ? 9 : 3;
@@ -7764,8 +7968,40 @@ static int psx_overlay_ui_set_value(void* ctx, const RecompRuntimeUiItem* item, 
         }
         g_ws_projection_mode = -1;
         refresh_widescreen_projection();
-        resize_window_keep_height_for_aspect(num, den);
+        int scale = get_current_window_scale();
+        int height = 240 * scale;
+        int width = (int)((int64_t)height * num / den);
+        g_video_win_w = width;
+        if (sdl_window && !s_window_fullscreen.mode && !g_fullscreen) {
+            SDL_SetWindowSize(sdl_window, width, height);
+            vk_renderer_notify_window_resize();
+        }
         host_osd_push((num == 16 && den == 9) ? "Aspect: 16:9" : "Aspect: 4:3", 1200);
+        return 1;
+    }
+    if (std::strcmp(item->key, "display.scanlines") == 0) {
+        g_video_scanlines = value != 0;
+        psx_video_set_scanlines(g_video_scanlines ? 1 : 0, g_video_scanline_strength);
+        char msg[32];
+        std::snprintf(msg, sizeof(msg), "Scanlines %s", g_video_scanlines ? "on" : "off");
+        host_osd_push(msg, 1200);
+        return 1;
+    }
+    if (std::strcmp(item->key, "display.scanline_strength") == 0) {
+        g_video_scanline_strength = (float)value / 100.0f;
+        psx_video_set_scanlines(g_video_scanlines ? 1 : 0, g_video_scanline_strength);
+        return 1;
+    }
+    if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_RESOLUTION_SCALE) == 0) {
+        g_video_scale = std::max(1, std::min(8, value));
+        char msg[32];
+        std::snprintf(msg, sizeof(msg), "Resolution %dx", g_video_scale);
+        host_osd_push(msg, 1200);
+        return 1;
+    }
+    if (std::strcmp(item->key, "graphics.antialiasing") == 0) {
+        g_video_aa = value != 0;
+        host_osd_push(g_video_aa ? "Antialiasing: on" : "Antialiasing: off", 1200);
         return 1;
     }
     if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_TEXTURE_FILTER) == 0) {
@@ -7774,8 +8010,56 @@ static int psx_overlay_ui_set_value(void* ctx, const RecompRuntimeUiItem* item, 
         host_osd_push(g_video_texfilter ? "Texture filter: Linear" : "Texture filter: Nearest", 1200);
         return 1;
     }
+    if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_FMV_FILTER) == 0) {
+        g_video_fmv_filter = std::max(0, std::min(3, value));
+        gl_renderer_set_fmv_filter(g_video_fmv_filter);
+        return 1;
+    }
+    if (std::strcmp(item->key, "graphics.crt_filter") == 0) {
+        g_video_screen = std::max(0, std::min(3, value));
+        gpu_set_screen_kind(g_video_screen);
+        static const char* crt_names[] = { "Raw", "CRT", "Composite", "Trinitron" };
+        char msg[48];
+        std::snprintf(msg, sizeof(msg), "Screen filter: %s", crt_names[g_video_screen]);
+        host_osd_push(msg, 1200);
+        return 1;
+    }
+    if (std::strcmp(item->key, "graphics.geometry_correction") == 0) {
+        g_video_geometry_correction = value != 0;
+        host_osd_push(g_video_geometry_correction ? "Geometry precision: on" : "Geometry precision: off", 1200);
+        return 1;
+    }
+    if (std::strcmp(item->key, "graphics.perspective_texturing") == 0) {
+        g_video_perspective_texturing = value != 0;
+        host_osd_push(g_video_perspective_texturing ? "Perspective texturing: on" : "Perspective texturing: off", 1200);
+        return 1;
+    }
+    if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_AUDIO) == 0) {
+        if (!value) host_volume_set(0);
+        else if (host_volume_get() == 0) host_volume_set(80);
+        return 1;
+    }
     if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_VOLUME) == 0) {
         host_volume_set(value);
+        return 1;
+    }
+    if (std::strcmp(item->key, "input.dual_analog") == 0) {
+        dual_analog_buttons = value != 0;
+        host_osd_push(dual_analog_buttons ? "Dual analog: on" : "Dual analog: off", 1200);
+        return 1;
+    }
+    if (std::strcmp(item->key, "input.dual_analog_duplicate_face") == 0) {
+        dual_analog_duplicate_face = value != 0;
+        host_osd_push(dual_analog_duplicate_face ? "Shoulder duplicate: on" : "Shoulder duplicate: off", 1200);
+        return 1;
+    }
+    if (std::strcmp(item->key, "system.fast_boot") == 0) {
+        g_fast_boot = value != 0;
+        host_osd_push(g_fast_boot ? "Fast boot: on" : "Fast boot: off", 1200);
+        return 1;
+    }
+    if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_STATE_SLOT) == 0) {
+        savestate_menu_slot = std::max(0, std::min(11, value - 1));
         return 1;
     }
     return 0;
@@ -7788,13 +8072,20 @@ static int psx_overlay_ui_run_action(void* ctx, const RecompRuntimeUiItem* item)
         if (g_psx_overlay_ui) recomp_runtime_ui_close(g_psx_overlay_ui);
         return 1;
     }
+    if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_SAVE_STATE) == 0) {
+        savestate_submit_slot(savestate_menu_slot, 1);
+        return 1;
+    }
+    if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_LOAD_STATE) == 0) {
+        savestate_submit_slot(savestate_menu_slot, 0);
+        return 1;
+    }
     if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_RETURN_TO_LAUNCHER) == 0) {
-        if (g_psx_overlay_ui) recomp_runtime_ui_close(g_psx_overlay_ui);
         if (g_netplay_from_lobby) {
+            if (g_psx_overlay_ui) recomp_runtime_ui_close(g_psx_overlay_ui);
             psx_request_return_to_lobby();
         } else {
-            shutdown_runtime();
-            std::exit(0);
+            psx_relaunch_to_launcher();
         }
         return 1;
     }
@@ -7805,6 +8096,15 @@ static int psx_overlay_ui_run_action(void* ctx, const RecompRuntimeUiItem* item)
         return 1;
     }
     return 0;
+}
+
+static int psx_overlay_ui_is_enabled(void* ctx, const RecompRuntimeUiItem* item) {
+    (void)ctx;
+    if (!item || !item->key) return 1;
+    if (std::strcmp(item->key, "input.dual_analog_duplicate_face") == 0) {
+        return dual_analog_buttons ? 1 : 0;
+    }
+    return 1;
 }
 
 static void psx_overlay_ui_save(void* ctx) {
@@ -7819,6 +8119,42 @@ static void psx_overlay_ui_save(void* ctx) {
     settings.has_fullscreen = true;
     settings.texture_filter = g_video_texfilter;
     settings.has_texture_filter = true;
+    settings.fmv_filter = g_video_fmv_filter;
+    settings.has_fmv_filter = true;
+    settings.supersampling = g_video_scale;
+    settings.has_supersampling = true;
+    settings.antialiasing = g_video_aa;
+    settings.has_antialiasing = true;
+    settings.screen_kind = g_video_screen;
+    settings.has_screen_kind = true;
+    settings.scanlines = g_video_scanlines;
+    settings.has_scanlines = true;
+    settings.scanline_strength = g_video_scanline_strength;
+    settings.has_scanline_strength = true;
+    settings.geometry_correction = (g_video_geometry_correction != 0);
+    settings.has_geometry_correction = true;
+    settings.perspective_texturing = (g_video_perspective_texturing != 0);
+    settings.has_perspective_texturing = true;
+    settings.dual_analog_buttons = (dual_analog_buttons != 0);
+    settings.has_dual_analog_buttons = true;
+    settings.dual_analog_duplicate_face = (dual_analog_duplicate_face != 0);
+    settings.has_dual_analog_duplicate_face = true;
+    settings.fast_boot = g_fast_boot;
+    settings.has_fast_boot = true;
+    settings.window_width = g_video_win_w > 0 ? g_video_win_w : 1280;
+    settings.has_window_width = true;
+    settings.vsync = g_video_vsync;
+    settings.has_vsync = true;
+    settings.frame_interpolation = (g_frame_interpolation != 0);
+    settings.has_frame_interpolation = true;
+    settings.auto_skip_fmv = (g_auto_skip_fmv != 0);
+    settings.has_auto_skip_fmv = true;
+    settings.spu_hq = g_audio_spu_hq;
+    settings.has_spu_hq = true;
+    settings.bios_hle = g_bios_hle;
+    settings.has_bios_hle = true;
+    settings.rewind = (g_rewind_enabled != 0);
+    settings.has_rewind = true;
     PSXRecompV4::save_user_settings(g_active_settings_path, settings);
 }
 
@@ -7827,6 +8163,84 @@ static void psx_overlay_ui_visibility_changed(void* ctx, int open) {
     g_psx_overlay_open = open ? 1 : 0;
     psx_overlay_sync_pixels();
 }
+
+static const RecompRuntimeUiItem kOverlayExtraItems[] = {
+    {
+        "display.vsync", "Display", "VSync",
+        "Vertical synchronization mode.",
+        RECOMP_RUNTIME_UI_CHOICE, 0, 2, 1, kVsyncChoices, 3, nullptr
+    },
+    {
+        "display.scanlines", "Display", "Scanlines",
+        "Enable CRT scanline post-processing filter.",
+        RECOMP_RUNTIME_UI_BOOL, 0, 1, 1, nullptr, 0, nullptr
+    },
+    {
+        "display.scanline_strength", "Display", "Scanline strength",
+        "Intensity of scanlines in percent.",
+        RECOMP_RUNTIME_UI_INT, 0, 100, 5, nullptr, 0, nullptr
+    },
+    {
+        "display.frame_interpolation", "Display", "Frame interpolation",
+        "Smooth motion temporal frame blending.",
+        RECOMP_RUNTIME_UI_BOOL, 0, 1, 1, nullptr, 0, nullptr
+    },
+    {
+        "graphics.antialiasing", "Graphics", "Antialiasing",
+        "Smooth present filtering across the frame.",
+        RECOMP_RUNTIME_UI_BOOL, 0, 1, 1, nullptr, 0, nullptr
+    },
+    {
+        "graphics.crt_filter", "Graphics", "Screen filter",
+        "CRT display shader preset.",
+        RECOMP_RUNTIME_UI_CHOICE, 0, 3, 1, kScreenFilterChoices, 4, nullptr
+    },
+    {
+        "graphics.geometry_correction", "Graphics", "Geometry precision",
+        "PGXP sub-pixel vertex precision for stable 3D geometry.",
+        RECOMP_RUNTIME_UI_BOOL, 0, 1, 1, nullptr, 0, nullptr
+    },
+    {
+        "graphics.perspective_texturing", "Graphics", "Perspective texturing",
+        "PGXP perspective-correct texture mapping.",
+        RECOMP_RUNTIME_UI_BOOL, 0, 1, 1, nullptr, 0, nullptr
+    },
+    {
+        "graphics.skip_fmv", "Graphics", "Skip FMVs",
+        "Automatically skip pre-rendered cutscenes/movies.",
+        RECOMP_RUNTIME_UI_BOOL, 0, 1, 1, nullptr, 0, nullptr
+    },
+    {
+        "audio.spu_hq", "Audio", "SPU high quality",
+        "Enable floating-point SPU processing shadow.",
+        RECOMP_RUNTIME_UI_BOOL, 0, 1, 1, nullptr, 0, nullptr
+    },
+    {
+        "input.dual_analog", "Input", "Dual analog mode",
+        "Left stick: move/strafe | Right stick: aim/turn.",
+        RECOMP_RUNTIME_UI_BOOL, 0, 1, 1, nullptr, 0, nullptr
+    },
+    {
+        "input.dual_analog_duplicate_face", "Input", "Duplicate face on shoulders",
+        "L1=Triangle, R1=Cross, L2=Circle, R2=Square.",
+        RECOMP_RUNTIME_UI_BOOL, 0, 1, 1, nullptr, 0, nullptr
+    },
+    {
+        "system.fast_boot", "System", "Fast boot",
+        "Skip the PlayStation BIOS boot logo and jump to game.",
+        RECOMP_RUNTIME_UI_BOOL, 0, 1, 1, nullptr, 0, nullptr
+    },
+    {
+        "system.bios_hle", "System", "HLE BIOS",
+        "Use high-level BIOS emulation hooks.",
+        RECOMP_RUNTIME_UI_BOOL, 0, 1, 1, nullptr, 0, nullptr
+    },
+    {
+        "system.rewind_enabled", "System", "Rewind feature",
+        "Enable real-time rewind buffer.",
+        RECOMP_RUNTIME_UI_BOOL, 0, 1, 1, nullptr, 0, nullptr
+    },
+};
 
 static void psx_overlay_ensure_ui(void) {
     if (g_psx_overlay_ui) return;
@@ -7838,19 +8252,28 @@ static void psx_overlay_ensure_ui(void) {
     cfg.menu.callbacks.get_value = psx_overlay_ui_get_value;
     cfg.menu.callbacks.set_value = psx_overlay_ui_set_value;
     cfg.menu.callbacks.run_action = psx_overlay_ui_run_action;
-    cfg.menu.callbacks.is_enabled = nullptr;
+    cfg.menu.callbacks.is_enabled = psx_overlay_ui_is_enabled;
     cfg.menu.callbacks.save = psx_overlay_ui_save;
     cfg.menu.callbacks.visibility_changed = psx_overlay_ui_visibility_changed;
     cfg.features = RECOMP_RUNTIME_UI_STANDARD_RESUME |
                    RECOMP_RUNTIME_UI_STANDARD_VIEW_MODE |
                    RECOMP_RUNTIME_UI_STANDARD_FULLSCREEN |
+                   RECOMP_RUNTIME_UI_STANDARD_WINDOW_SCALE |
+                   RECOMP_RUNTIME_UI_STANDARD_RESOLUTION_SCALE |
                    RECOMP_RUNTIME_UI_STANDARD_TEXTURE_FILTER |
+                   RECOMP_RUNTIME_UI_STANDARD_FMV_FILTER |
+                   RECOMP_RUNTIME_UI_STANDARD_AUDIO |
                    RECOMP_RUNTIME_UI_STANDARD_VOLUME |
+                   RECOMP_RUNTIME_UI_STANDARD_STATE_SLOT |
+                   RECOMP_RUNTIME_UI_STANDARD_SAVE_STATE |
+                   RECOMP_RUNTIME_UI_STANDARD_LOAD_STATE |
                    RECOMP_RUNTIME_UI_STANDARD_RETURN_TO_LAUNCHER |
                    RECOMP_RUNTIME_UI_STANDARD_QUIT;
     cfg.view_modes = RECOMP_RUNTIME_UI_VIEW_MODE_NATIVE | RECOMP_RUNTIME_UI_VIEW_MODE_FIXED_16_9;
     cfg.native_view_label = "4:3 Standard";
     cfg.fixed_view_label = "16:9 Widescreen";
+    cfg.extra_items = kOverlayExtraItems;
+    cfg.extra_item_count = sizeof(kOverlayExtraItems) / sizeof(kOverlayExtraItems[0]);
     g_psx_overlay_ui = recomp_runtime_ui_create_standard(&cfg);
 }
 
@@ -8001,7 +8424,6 @@ static void psx_overlay_host_pause_loop(void) {
     savestate_input_guard_arm();
 }
 
-static int savestate_menu_slot = 0;
 static int savestate_menu_ignore_toggle_release = 0;
 static SDL_Keycode savestate_menu_open_key = 0;
 
@@ -16221,6 +16643,8 @@ static uint32_t gcs_gate_read_ram(uint32_t phys, uint32_t size) {
 }
 
 int main(int argc, char** argv) {
+    if (argv && argv[0])
+        g_saved_argv0 = argv[0];
     /* Force line-buffered output so messages appear even if killed. */
     std::setvbuf(stdout, nullptr, _IOLBF, BUFSIZ);
     std::setvbuf(stderr, nullptr, _IOLBF, BUFSIZ);
@@ -17220,8 +17644,14 @@ int main(int argc, char** argv) {
                 "DEPRECATED and ignored; enable the \"Fast Loading (host "
                 "pacing)\" mod instead. The stale key is dropped on the next "
                 "settings save.\n");
-        if (us.has_fast_boot)      fast_boot = us.fast_boot;
-        if (us.has_bios_hle)       bios_hle  = us.bios_hle;
+        if (us.has_fast_boot) {
+            fast_boot = us.fast_boot;
+            g_fast_boot = fast_boot;
+        }
+        if (us.has_bios_hle) {
+            bios_hle = us.bios_hle;
+            g_bios_hle = bios_hle;
+        }
         if (us.has_fullscreen)     g_fullscreen      = us.fullscreen;
         if (us.has_aspect_ratio) {
             g_video_aspect_num = us.aspect_num;
@@ -17303,6 +17733,8 @@ int main(int argc, char** argv) {
         }
         if (us.has_dual_analog_buttons)
             dual_analog_buttons = us.dual_analog_buttons ? 1 : 0;
+        if (us.has_dual_analog_duplicate_face)
+            dual_analog_duplicate_face = us.dual_analog_duplicate_face ? 1 : 0;
         if (us.has_language) resolved_language = us.language;
         {
             const int n = std::min(PSX_MAX_PLAYERS,
@@ -17881,6 +18313,8 @@ int main(int argc, char** argv) {
             seed.multitap_analog = multitap_analog; seed.has_multitap_analog = true;
             seed.dual_analog_buttons = dual_analog_buttons != 0;
             seed.has_dual_analog_buttons = dual_analog_buttons_offered;
+            seed.dual_analog_duplicate_face = dual_analog_duplicate_face != 0;
+            seed.has_dual_analog_duplicate_face = dual_analog_buttons_offered;
             if (!memcard1_path.empty()) { seed.memcard1_path = memcard1_path; seed.has_memcard1_path = true; }
             if (!memcard2_path.empty()) { seed.memcard2_path = memcard2_path; seed.has_memcard2_path = true; }
             seed.language = resolved_language; seed.has_language = true;
@@ -18074,6 +18508,7 @@ int main(int argc, char** argv) {
             g_lnch_multitap_analog = seed.multitap_analog ? 1 : 0;
 #endif
             ls.dual_analog_buttons = seed.dual_analog_buttons ? 1 : 0;
+            ls.dual_analog_duplicate_face = seed.dual_analog_duplicate_face ? 1 : 0;
 
             /* Region badge: game.toml [game] region wins verbatim; otherwise derive
              * from the game_id serial prefix (SCUS/SLUS/LSP -> USA, SCES/SLES ->
@@ -18456,6 +18891,9 @@ int main(int argc, char** argv) {
                     dual_analog_buttons = ls.dual_analog_buttons != 0;
                     seed.dual_analog_buttons = dual_analog_buttons != 0;
                     seed.has_dual_analog_buttons = true;
+                    dual_analog_duplicate_face = ls.dual_analog_duplicate_face != 0;
+                    seed.dual_analog_duplicate_face = dual_analog_duplicate_face != 0;
+                    seed.has_dual_analog_duplicate_face = true;
                 }
                 if (ls.memcard_path[0][0]) { seed.memcard1_path = ls.memcard_path[0]; seed.has_memcard1_path = true; }
                 if (ls.memcard_path[1][0]) { seed.memcard2_path = ls.memcard_path[1]; seed.has_memcard2_path = true; }
@@ -20598,6 +21036,7 @@ soft_return_lobby:
         g_lnch_multitap_analog = multitap_analog ? 1 : 0;
 #endif
     ls.dual_analog_buttons = dual_analog_buttons ? 1 : 0;
+    ls.dual_analog_duplicate_face = dual_analog_duplicate_face ? 1 : 0;
         /* Preserve input devices across soft-return. A zeroed ls left every
          * player_src at None, so the rematch UI (and a subsequent writeback)
          * looked like netplay had wiped the pad assignment. */
@@ -20864,6 +21303,9 @@ soft_return_lobby:
                     dual_analog_buttons = ls.dual_analog_buttons != 0;
                     us.dual_analog_buttons = dual_analog_buttons != 0;
                     us.has_dual_analog_buttons = true;
+                    dual_analog_duplicate_face = ls.dual_analog_duplicate_face != 0;
+                    us.dual_analog_duplicate_face = dual_analog_duplicate_face != 0;
+                    us.has_dual_analog_duplicate_face = true;
                 }
                 /* Memory-card slots: same fold as the first-boot exit path, so
                  * a card toggled or browsed in from the rematch launcher
@@ -21106,6 +21548,9 @@ soft_return_lobby:
                     dual_analog_buttons = ls.dual_analog_buttons != 0;
                     us.dual_analog_buttons = dual_analog_buttons != 0;
                     us.has_dual_analog_buttons = true;
+                    dual_analog_duplicate_face = ls.dual_analog_duplicate_face != 0;
+                    us.dual_analog_duplicate_face = dual_analog_duplicate_face != 0;
+                    us.has_dual_analog_duplicate_face = true;
                 }
                 std::string mod_error;
                 if (net_cfg.enabled) {

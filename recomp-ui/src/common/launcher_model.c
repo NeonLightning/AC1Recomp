@@ -3738,6 +3738,20 @@ void launcher_model_toggle_dual_analog_buttons(LauncherModel* m) {
     m->s.dual_analog_buttons = m->s.dual_analog_buttons ? 0 : 1;
 }
 
+int launcher_model_dual_analog_duplicate_face_available(const LauncherModel* m) {
+    return launcher_model_dual_analog_buttons_available(m);
+}
+
+int launcher_model_dual_analog_duplicate_face_enabled(const LauncherModel* m) {
+    return launcher_model_dual_analog_duplicate_face_available(m) &&
+           m->s.dual_analog_duplicate_face != 0;
+}
+
+void launcher_model_toggle_dual_analog_duplicate_face(LauncherModel* m) {
+    if (!launcher_model_dual_analog_duplicate_face_available(m)) return;
+    m->s.dual_analog_duplicate_face = m->s.dual_analog_duplicate_face ? 0 : 1;
+}
+
 int launcher_model_virtual_stylus_available(const LauncherModel* m) {
     return m && m->has_virtual_stylus;
 }
