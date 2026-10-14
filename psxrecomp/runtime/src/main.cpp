@@ -3693,6 +3693,8 @@ static int host_driver_vsync_unreliable(void) {
 }
 
 static int present_vsync_owns_cadence(void) {
+    if (s_manual_ff_active)
+        return 0;
     if (g_video_vsync == 0 || g_video_vsync == 2 || g_present_vsync_disabled)
         return 0;
     if (host_driver_vsync_unreliable())
@@ -3713,6 +3715,8 @@ extern "C" int psx_present_vsync_owns_cadence(void) {
 }
 
 static int present_effective_swap_interval(void) {
+    if (s_manual_ff_active)
+        return 0;
     if (g_netplay_vsync_forced_off || psx_netplay_active())
         return 0;
     if (g_frame_interpolation)
@@ -9668,7 +9672,10 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
             const int mult = manual_fast_forward_multiplier();
             const int present_every = (mult < 0) ? 8 : (mult <= 2 ? 2 : (mult <= 4 ? 4 : 8));
             manual_turbo_active = true;
-            s_manual_ff_active = 1;
+            if (!s_manual_ff_active) {
+                s_manual_ff_active = 1;
+                apply_present_cadence();  /* vsync would cap fast-forward at the panel rate */
+            }
             s_presentation_fast_forward = 1;
             if (!turbo_was_down && !g_manual_turbo_latched) {
                 char msg[40];
@@ -9695,7 +9702,10 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         } else {
             turbo_skip = 0;
             turbo_was_down = 0;
-            s_manual_ff_active = 0;
+            if (s_manual_ff_active) {
+                s_manual_ff_active = 0;
+                apply_present_cadence();
+            }
         }
     }
 
@@ -9935,7 +9945,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
          * decode; the activity stamp also covers authentic 4:3 configurations. */
         if (g_gl_active)
             gl_renderer_set_interpolation_suspended(
-                fmv_frame || mdec_recently_active(2));
+                fmv_frame || mdec_recently_active(2) || s_manual_ff_active);
         const bool game_view =
             netplay_game_local_view(di, &gv_x, &gv_y, &gv_w, &gv_h);
         const int local_viewport_slot =
@@ -11023,6 +11033,9 @@ static void sdl_vblank_present(void) {
      * present-body C++ destructors have run (mirrors savestate BB-edge path). */
     psx_netplay_rb_flush_resume();
     if (ep.skip_pace || psx_return_to_lobby_requested())
+        return;
+    /* Manual fast-forward paces itself in the present body at period/mult. */
+    if (s_manual_ff_active && !psx_netplay_active())
         return;
     if (psx_netplay_is_resimulating() || psx_netplay_rb_tip_holding())
         return;

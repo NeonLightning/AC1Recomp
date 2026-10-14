@@ -23,6 +23,8 @@
 #include "retcomm_rbengine/snap_ring.h"
 #endif
 
+extern int psx_presentation_fast_forward(void);
+
 #define RW_THUMB_W     128
 #define RW_THUMB_H      96
 #define RW_MAX_DEPTH   200
@@ -486,6 +488,9 @@ int psx_rewind_needs_present(void)
 void psx_rewind_note_frame(void)
 {
     uint32_t iv;
+    /* Full-state captures every few frames are too costly while sped up. */
+    if (psx_presentation_fast_forward())
+        return;
     if (!psx_rewind_enabled() || s_open || psx_netplay_active() ||
         s_title_blocked)
         return;

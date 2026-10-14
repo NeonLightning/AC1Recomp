@@ -4288,14 +4288,6 @@ static int host_rebuild_game(const char* disc_path, char* out_exe_path,
                                 err_cap, on_progress, progress_ctx);
 }
 
-static int host_pgo_optimize(const char* disc_path, char* out_exe_path,
-                             size_t out_cap, char* err_msg, size_t err_cap,
-                             RecompLauncherCPrepareProgressFn on_progress,
-                             void* progress_ctx) {
-    return host_rebuild_game_ex(disc_path, 1, out_exe_path, out_cap, err_msg,
-                                err_cap, on_progress, progress_ctx);
-}
-
 /* Settings → VIDEO → Apply FMV Timing Opt: regenerate C (picks up
  * load_charge_batch) then rebuild without PGO training. */
 static int host_fmv_timing_optimize(const char* disc_path, char* out_exe_path,
@@ -4787,17 +4779,6 @@ void psxrecomp_codegen_host_apply(RecompLauncherCGameInfo* gi,
         gi->ensure_toolchain_with_progress = host_ensure_toolchain_with_progress;
         gi->toolchain_update_available = host_toolchain_update_available;
         gi->toolchain_repair_note = host_toolchain_repair_note;
-        /* Settings → SYSTEM: PGO on existing generated C (no wizard). */
-        gi->pgo_optimize_with_progress = host_pgo_optimize;
-#if defined(_WIN32)
-        gi->pgo_busy_status = "Scheduling FMV PGO optimize…";
-        gi->pgo_success_status =
-            "Exiting for Windows PGO train + rebuild…";
-#else
-        gi->pgo_busy_status =
-            "Optimizing FMV (instrument → train → rebuild)…";
-        gi->pgo_success_status = "FMV optimize complete — restarting…";
-#endif
         /* FMV timing (emitter load_charge_batch) generate+rebuild: host kept
          * but not exposed in Settings for now. */
     } else {

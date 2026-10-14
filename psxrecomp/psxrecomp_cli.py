@@ -2100,6 +2100,20 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
             train_runs = int(getattr(args, "train_runs", 0) or 0)
             if train_runs <= 0:
                 train_runs = int(pgo.get("train_runs") or 2)
+            clang = _tool_in_dir(
+                resolve_embedded_toolchain_bin(project_root), "clang"
+            ) or _which_tool("clang")
+            if clang is not None and sys.platform != "win32":
+                found = subprocess.run(
+                    [str(clang), "--print-file-name=libclang_rt.profile.a"],
+                    capture_output=True, text=True, check=False,
+                ).stdout.strip()
+                if not Path(found).is_absolute() or not Path(found).is_file():
+                    raise RuntimeError(
+                        f"PGO needs libclang_rt.profile.a, which {clang} does "
+                        "not ship. Update cmake-clang-v1 to a build that "
+                        "includes compiler-rt profile, or disable PGO."
+                    )
             progress.phase(
                 "pgo_instrument",
                 pct=0.1,
