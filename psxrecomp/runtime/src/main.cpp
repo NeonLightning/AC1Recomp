@@ -5659,7 +5659,7 @@ static uint16_t pad_buttons_for(const PlayerInput& p, int player, bool suppress_
  * The keyboard branch is unaffected: psx_keybinds_sticks maps that player's
  * bound stick-direction keys onto the axes, which is their only stick
  * source. */
-static void pad_sticks_for(const PlayerInput& p, int player, uint8_t out[4]) {
+static void pad_sticks_for_raw(const PlayerInput& p, int player, uint8_t out[4]) {
     out[0] = out[1] = out[2] = out[3] = 0x80;
     if (p.kind == 1) {
         /* Keyboard analog: the configurable left/right stick-direction binds
@@ -5729,6 +5729,39 @@ static void pad_sticks_for(const PlayerInput& p, int player, uint8_t out[4]) {
             apply_discrete_stick("rs_up", "rs_down", "rs_left", "rs_right",
                                  &out[2], &out[3]);
         }
+    }
+}
+
+/* Exponential smoothing time constant for analog stick output (ms); 0 disables. */
+static double controller_stick_smoothing_ms = 40.0;
+
+/* Smoothed stick output, per player. Time-based so repeated calls within one
+ * frame don't advance the filter more than once. */
+static void pad_sticks_for(const PlayerInput& p, int player, uint8_t out[4]) {
+    pad_sticks_for_raw(p, player, out);
+    if (controller_stick_smoothing_ms <= 0.0 || player < 0 || player >= 8) return;
+
+    static double state[8][4];
+    static uint64_t last_ticks[8];
+    static bool init[8];
+    const uint64_t now = SDL_GetPerformanceCounter();
+    if (!init[player]) {
+        for (int i = 0; i < 4; i++) state[player][i] = out[i];
+        init[player] = true;
+        last_ticks[player] = now;
+        return;
+    }
+    const double dt_ms = 1000.0 * (double)(now - last_ticks[player]) /
+                         (double)SDL_GetPerformanceFrequency();
+    if (dt_ms > 0.0) {
+        last_ticks[player] = now;
+        const double a = 1.0 - std::exp(-dt_ms / controller_stick_smoothing_ms);
+        for (int i = 0; i < 4; i++) state[player][i] += ((double)out[i] - state[player][i]) * a;
+    }
+    for (int i = 0; i < 4; i++) {
+        /* Snap to exact target when close so centre returns to 0x80 and full tilt reaches the rails. */
+        if (std::fabs(state[player][i] - (double)out[i]) < 0.75) state[player][i] = out[i];
+        out[i] = (uint8_t)(state[player][i] + 0.5);
     }
 }
 

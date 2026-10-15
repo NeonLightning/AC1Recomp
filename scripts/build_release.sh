@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="${1:-build-release}"
 ARTIFACT="${2:-linux-x64}"
-RECOMPILER_BUILD="${3:-psxrecomp/recompiler/build}"
+RECOMPILER_BUILD="${3:-build-recompiler}"
 BUILD_JOBS="${BUILD_JOBS:-$(nproc)}"
 
 cd "${ROOT}"
