@@ -1231,7 +1231,9 @@ if(BUILD_TESTING)
                 overlay_widescreen_callbacks
                 pad_delivery
                 pad_trace
+                playtest_telemetry_analysis
                 psx_chd
+                replay_diagnostics
                 sbi_registry
                 static_fragment_variant_keys)
             add_test(

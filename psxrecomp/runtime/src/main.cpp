@@ -2805,8 +2805,15 @@ static std::filesystem::path resolve_existing_runtime_path(const char* requested
     return {};
 }
 
+static std::filesystem::path g_runtime_profile_dir;
+
+static std::filesystem::path runtime_profile_dir(const char* argv0) {
+    return g_runtime_profile_dir.empty() ? exe_dir_from_argv(argv0)
+                                         : g_runtime_profile_dir;
+}
+
 static std::filesystem::path sidecar_cfg_path(const char* argv0, const char* filename) {
-    return exe_dir_from_argv(argv0) / filename;
+    return runtime_profile_dir(argv0) / filename;
 }
 
 /* Relative paths in settings.toml and the bios.cfg / disc.cfg sidecars are
@@ -2817,7 +2824,7 @@ static std::filesystem::path sidecar_cfg_path(const char* argv0, const char* fil
 static std::filesystem::path anchor_on_exe_dir(const char* argv0,
                                                const std::filesystem::path& p) {
     if (p.empty()) return p;
-    return PSXRecompV4::host_resolve(exe_dir_from_argv(argv0), p);
+    return PSXRecompV4::host_resolve(runtime_profile_dir(argv0), p);
 }
 
 static std::filesystem::path read_cached_path(const char* argv0, const char* filename) {
@@ -2839,7 +2846,7 @@ static void write_cached_path(const char* argv0, const char* filename,
     // read_cached_path anchors relative paths on the exe directory.
     if (f.is_open())
         f << PSXRecompV4::host_path_forward_slashes(
-                 PSXRecompV4::relative_to_folder(path, exe_dir_from_argv(argv0))) << "\n";
+                 PSXRecompV4::relative_to_folder(path, runtime_profile_dir(argv0))) << "\n";
 }
 
 /* Nobody is at the screen: never block on a modal dialog or a file picker. */
@@ -3203,7 +3210,7 @@ static std::filesystem::path resolve_bios_for_runtime(const char* requested,
                                                       bool requested_is_explicit) {
     const bool openbios_allowed = s_openbios_allowed;
     const PsxBiosBackend* bundled = psx_bios_bundled();
-    s_bios_exe_dir = exe_dir_from_argv(argv0).string();
+    s_bios_exe_dir = runtime_profile_dir(argv0).string();
     const bool player_bios_selectable =
         psx_bios_has_selectable() != 0 || bios_module_supported_here();
     const bool bundled_only =
@@ -3322,7 +3329,7 @@ static std::filesystem::path resolve_disc_for_runtime(const std::filesystem::pat
 
     std::filesystem::path cached = read_cached_path(argv0, "disc.cfg");
     if (!cached.empty()) {
-        cached = resolve_persisted_disc_path(cached, exe_dir_from_argv(argv0));
+        cached = resolve_persisted_disc_path(cached, runtime_profile_dir(argv0));
     }
     if (!cached.empty() && std::filesystem::exists(cached) &&
         validate_disc_for_launch(cached, game_id)) {
@@ -3370,11 +3377,11 @@ static std::filesystem::path resolve_bios_path(const char* requested, const char
     if (PSXRecompV4::host_path_is_absolute(p)) return p;
 
     // Anchor on the exe directory — never cwd (see exe_dir_from_argv).
-    fs::path found = find_upward(exe_dir_from_argv(argv0), p);
+    fs::path found = find_upward(runtime_profile_dir(argv0), p);
     if (!found.empty()) return found / p;
     // Same walk, accepting the other naming convention at each rung: the
     // literal name is absent but a region-qualified sibling may be present.
-    for (fs::path dir = PSXRecompV4::host_absolute(exe_dir_from_argv(argv0), ec);
+    for (fs::path dir = PSXRecompV4::host_absolute(runtime_profile_dir(argv0), ec);
          !dir.empty(); dir = dir.parent_path()) {
         const fs::path aliased = PSXRecompV4::resolve_bios_rom(dir / p);
         if (aliased != dir / p && fs::exists(aliased, ec)) return aliased;
@@ -3388,7 +3395,7 @@ static std::filesystem::path resolve_bios_path(const char* requested, const char
     // resolve a build-machine BIOS there — it falls through to bios.cfg or the
     // interactive picker.
     const fs::path dev_marker = fs::path("psxrecomp-v4") / p;
-    found = find_upward(exe_dir_from_argv(argv0), dev_marker);
+    found = find_upward(runtime_profile_dir(argv0), dev_marker);
     if (!found.empty()) return found / dev_marker;
     return p;
 }
@@ -3431,7 +3438,7 @@ static std::filesystem::path discover_retail_bios_near(const char* argv0) {
     static const char* kSubdirs[] = {
         "bios", "", "system", "firmware", "psxrecomp/bios", "psxrecomp-v4/bios",
     };
-    const fs::path exe_dir = exe_dir_from_argv(argv0);
+    const fs::path exe_dir = runtime_profile_dir(argv0);
     std::error_code ec;
     for (fs::path root = exe_dir; !root.empty(); root = root.parent_path()) {
         for (const char* sub : kSubdirs) {
@@ -5151,18 +5158,19 @@ static void load_input_config(const char* argv0) {
     set_default_controller_mapping();
 
     namespace fs = std::filesystem;
-    fs::path config_path = exe_dir_from_argv(argv0) / "input.ini";
+    fs::path config_path = runtime_profile_dir(argv0) / "input.ini";
+    const std::string keybind_anchor = runtime_profile_dir(argv0).string();
     std::error_code ec;
     if (!fs::exists(config_path, ec)) {
         std::ofstream out(config_path, std::ios::binary);
         if (out) out << default_input_ini_text();
-        psx_keybinds_init(argv0);
+        psx_keybinds_init(keybind_anchor.c_str());
         return;
     }
 
     std::ifstream in(config_path);
     if (!in) {
-        psx_keybinds_init(argv0);
+        psx_keybinds_init(keybind_anchor.c_str());
         return;
     }
 
@@ -5230,7 +5238,7 @@ static void load_input_config(const char* argv0) {
      * from input.ini's gamepad map. Loads the user's map (or writes defaults on
      * first run). The launcher may have just edited+saved this file; we re-read
      * it here so the runtime always reflects the current bindings. */
-    psx_keybinds_init(argv0);
+    psx_keybinds_init(keybind_anchor.c_str());
 }
 
 static void close_player(PlayerInput& p) {
@@ -16623,9 +16631,9 @@ namespace {
 #endif
 
     void ae_rui_set_sidecar_paths(const char* argv0) {
-        const auto exe = exe_dir_from_argv(argv0 ? argv0 : "");
-        g_rui_keybinds_path = (exe / "keybinds.ini").string();
-        g_rui_config_ini_path = (exe / "config.ini").string();
+        const auto profile_dir = runtime_profile_dir(argv0 ? argv0 : "");
+        g_rui_keybinds_path = (profile_dir / "keybinds.ini").string();
+        g_rui_config_ini_path = (profile_dir / "config.ini").string();
     }
 
     void ae_fill_psx_launcher_game_info(
@@ -16653,6 +16661,7 @@ namespace {
             g_rui_keybinds_path.empty() ? nullptr : g_rui_keybinds_path.c_str();
         gi->config_path =
             g_rui_config_ini_path.empty() ? nullptr : g_rui_config_ini_path.c_str();
+        gi->host_persists_paths = 1;
         gi->has_expected_crc = 0;
         gi->num_known_sha256 = 0;
         /* A title exposes only the fixed aspects it has opted into. */
@@ -17116,6 +17125,11 @@ int main(int argc, char** argv) {
     /* Record the resolved config path for the TCP fmv_state report (observability:
      * proves which game.toml actually loaded — CLI --game vs the baked default). */
     g_active_config_path = game_config_path;
+    if (game_config_path && game_config_path[0]) {
+        std::error_code profile_ec;
+        const auto config_path = PSXRecompV4::host_absolute(game_config_path, profile_ec);
+        if (!profile_ec) g_runtime_profile_dir = config_path.parent_path();
+    }
 
     std::filesystem::path memcard_dir;
     std::filesystem::path memcard1_path;   /* explicit slot-1 .mcd (empty => dir/card1.mcd) */
@@ -17773,7 +17787,7 @@ int main(int argc, char** argv) {
 
     if (!game_name.empty()) s_picker_game_name = game_name;
 
-    /* Layer the launcher-written settings.toml (next to the exe) over the
+    /* Layer the launcher-written settings.toml (next to this game's config) over the
      * bundled game.toml. Any field present there overrides the config value;
      * the command line (--bios/--disc) still wins over the file. Absent =>
      * fall through to game.toml. The file is the launcher's persistence. */
@@ -17784,7 +17798,7 @@ int main(int argc, char** argv) {
     bool user_settings_has_renderer = false;
     {
         std::filesystem::path settings_path =
-            exe_dir_from_argv(argv[0]) / "settings.toml";
+            runtime_profile_dir(argv[0]) / "settings.toml";
         g_active_settings_path = settings_path;
 #if defined(RECOMP_LAUNCHER)
         g_lnch_settings_path = settings_path;
@@ -17943,7 +17957,7 @@ int main(int argc, char** argv) {
             bios_explicit = true;
         }
         if (us.has_disc_path && !disc_override_path)
-            resolved_disc = resolve_persisted_disc_path(us.disc_path, exe_dir_from_argv(argv[0]));
+            resolved_disc = resolve_persisted_disc_path(us.disc_path, runtime_profile_dir(argv[0]));
         /* Multi-disc precedence. [disc] selected is authoritative ONLY WHEN
          * PRESENT; absent it, [disc] path decides and the index is derived
          * from it.
@@ -18097,7 +18111,7 @@ int main(int argc, char** argv) {
     if (cli_memcard_dir) {
         memcard_dir = std::filesystem::path(cli_memcard_dir);
         if (memcard_dir.is_relative())
-            memcard_dir = exe_dir_from_argv(argv[0]) / memcard_dir;
+            memcard_dir = runtime_profile_dir(argv[0]) / memcard_dir;
         memcard_dir = memcard_dir.lexically_normal();
         memcard1_path.clear();
         memcard2_path.clear();
@@ -19292,7 +19306,7 @@ int main(int argc, char** argv) {
             if (lr == 1) {
                 /* Keep settings changed and then dismissed with Quit. */
                 PSXRecompV4::save_user_settings(
-                    exe_dir_from_argv(argv[0]) / "settings.toml", seed);
+                    runtime_profile_dir(argv[0]) / "settings.toml", seed);
                 std::fprintf(stdout, "psxrecomp: launcher closed; exiting.\n");
                 if (overlay_init_thread.joinable())
                     overlay_init_thread.join();
@@ -19502,7 +19516,7 @@ int main(int argc, char** argv) {
                 g_video_win_w = seed.window_width;
                 /* Persist the user's choices next to the exe. */
                 PSXRecompV4::save_user_settings(
-                    exe_dir_from_argv(argv[0]) / "settings.toml", seed);
+                    runtime_profile_dir(argv[0]) / "settings.toml", seed);
             }
         }
     }
@@ -19642,7 +19656,7 @@ int main(int argc, char** argv) {
     if (cli_memcard_dir) {
         memcard_dir = std::filesystem::path(cli_memcard_dir);
         if (memcard_dir.is_relative())
-            memcard_dir = exe_dir_from_argv(argv[0]) / memcard_dir;
+            memcard_dir = runtime_profile_dir(argv[0]) / memcard_dir;
         memcard_dir = memcard_dir.lexically_normal();
         memcard1_path.clear();
         memcard2_path.clear();
@@ -21503,7 +21517,8 @@ soft_return_lobby:
             /* The rematch launcher can rebind keys just like the first-boot
              * one; the first-boot path re-reads keybinds.ini after the
              * launcher returns, and so must this one. */
-            psx_keybinds_init(argv[0]);
+            const std::string keybind_anchor = runtime_profile_dir(argv[0]).string();
+            psx_keybinds_init(keybind_anchor.c_str());
             g_audio_enabled = ls.enable_audio != 0;
             g_audio_restore_volume = ls.volume > 0 ? ls.volume : g_audio_restore_volume;
             host_volume_set(g_audio_enabled ? ls.volume : 0);
@@ -21611,7 +21626,7 @@ soft_return_lobby:
              * the rest of settings.toml — merge into the on-disk file. */
             {
                 const auto settings_path =
-                    exe_dir_from_argv(argv[0]) / "settings.toml";
+                    runtime_profile_dir(argv[0]) / "settings.toml";
                 PSXRecompV4::UserSettings us =
                     PSXRecompV4::load_user_settings(settings_path);
                 const int un = std::min(PSX_MAX_PLAYERS,

@@ -78,6 +78,20 @@ psxrecomp_add_game_runtime(psx-runtime
     CODEGEN_SETUP_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/codegen_setup.c"
 )
 
+psxrecomp_add_game_runtime(psx-project-phantasma
+    PRELOADED_MODS_DIR "${PSX_PRELOADED_MODS}"
+    ENABLE_SETUP_WIZARD
+    WINDOW_TITLE "Armored Core: Project Phantasma"
+    EXE_NAME "ArmoredCoreProjectPhantasma"
+    DEFAULT_GAME_CONFIG_PATH "games/project-phantasma/game.toml"
+    MAX_PLAYERS 2
+    APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/assets/psxrecomp.ico"
+    GEN_MARKER "games/project-phantasma/generated/SLUS_006.70_dispatch.c"
+    GEN_FULL_GLOB "games/project-phantasma/generated/SLUS_006.70_full_*.c"
+    CODEGEN_SETUP_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/games/project-phantasma/codegen_setup.c"
+    CODEGEN_SETUP_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/games/project-phantasma"
+)
+
 # Stage runtime configs next to the exe for direct build/ launches. Only copy
 # files that exist — never fail POST_BUILD when game_options.toml is absent.
 foreach(_PSX_RUNTIME_CONFIG game.toml game_options.toml)
@@ -90,6 +104,12 @@ foreach(_PSX_RUNTIME_CONFIG game.toml game_options.toml)
             VERBATIM)
     endif()
 endforeach()
+
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/games/project-phantasma")
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/games/project-phantasma/game.toml"
+    "${CMAKE_CURRENT_BINARY_DIR}/games/project-phantasma/game.toml"
+    COPYONLY)
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/assets/ui")
     add_custom_command(TARGET psx-runtime POST_BUILD
