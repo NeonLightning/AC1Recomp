@@ -62,6 +62,8 @@ Columns: **N** = native, **D** = DuckStation oracle.
 | `present_shot_seq` | ✓ |   | — | Completion counter for `present_shot`, plus `wrote` (1 = that completion produced a PNG). Sample before staging, poll until `seq` moves. Advances on success *and* failure, so the poll always terminates |
 | `fmv_chroma` | ✓ |   | `on` (optional: 0/1) | Read or set `[video] fmv_chroma_smoothing` live. Replies `on` and `frames` (24-bit presents smoothed so far) |
 | `texture_lod` | ✓ |   | `mode` (optional: 0 off, 1 mipmap), `aniso` (optional: 1..16) | Read or set `[video] texture_lod` / `anisotropic_filtering` live. Replies `mode`, `aniso` |
+| `bloom` | ✓ |   | `strength` (0..2), `threshold`, `time` (0/1), all optional | Read or set bloom live (`[video] bloom`). Replies the settings, `passes` and, while `time` is on, `us_mean`: the mean `glFinish`-fenced pass time over `timed` passes since the last query |
+| `dithering` | ✓ |   | `mode` (optional: 0 off, 1 on (default, native grid), 2 fine (internal pixels)) | Read or set `[video] dithering` live. Replies `mode` |
 | `post_aa` | ✓ |   | `mode` (optional: 0 off, 1 fxaa, 2 fxaa_hq) | Read or set post-process anti-aliasing live (`[video] antialiasing_mode`). Replies `mode`, `passes` (filtered presents so far) and `gpu_us`: the mean pass time since the last query when the run has `PSX_POST_AA_TIME=N` (N passes per present between `glFinish` fences, a measurement mode), else 0 |
 | `hd_textures` | ✓ |   | optional `replacements`, `dump` (0 or 1), `reload` (1) | HD pack root, switches, backend support, replacement count, matched/ready/applied draw counts, queued/pending dumps, composition hits/builds/pixels, GL uploads/evictions, decoded images/evictions/bytes. Optional controls update the configured host pack on the emulation thread; no configured root is an error. Reload retains unchanged upload identities. OpenGL displays replacements; software/Vulkan retain original artwork. Pair with `present_shot` for visual evidence and native VRAM probes for architectural data |
 | `gl_interp` | ✓ |   | — | OpenGL frame-rate presenter ([FRAME_RATE.md](FRAME_RATE.md)): enabled/suspended, host and target Hz, swaps, `source` (`vblank`/`flip`), `flip_period`, `captures` (new source frames) and `duplicates` (VBlanks that re-presented the same frame) |
@@ -491,9 +493,9 @@ between Play and TCP availability.
 
 ## Complete command index (generated)
 
-**369 commands registered** — 356 on the native server (`runtime/src/debug_server.c`), 61 on the Beetle server (`runtime/src/beetle_debug_server.c`).
+**387 commands registered** — 374 on the native server (`runtime/src/debug_server.c`), 61 on the Beetle server (`runtime/src/beetle_debug_server.c`).
 
-82 of 369 have prose above; **287 are index-only**. An index-only command still works — it just has no description here yet. Send it `{"cmd":"<name>"}` and read the reply, or find its `handle_*` function in the server source.
+85 of 387 have prose above; **302 are index-only**. An index-only command still works — it just has no description here yet. Send it `{"cmd":"<name>"}` and read the reply, or find its `handle_*` function in the server source.
 
 Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this block has drifted from the code.
 
@@ -509,6 +511,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `batch_sites` | ✓ |  | ✓ |
 | `bios_info` | ✓ |  | ✓ |
 | `bioscall_dump` | ✓ |  |  |
+| `bloom` | ✓ |  | ✓ |
 | `c0_history` | ✓ |  |  |
 | `call_focus_dump` | ✓ |  |  |
 | `call_focus_reset` | ✓ |  |  |
@@ -571,6 +574,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `dirty_ram_unsupported` | ✓ |  |  |
 | `disasm` | ✓ |  |  |
 | `disc_select` | ✓ |  |  |
+| `disc_tray_log` | ✓ |  |  |
 | `disp_ring` | ✓ |  |  |
 | `dispatch_check` | ✓ |  |  |
 | `dispatch_stats` | ✓ |  |  |
@@ -579,6 +583,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `display_ring_aux` | ✓ |  |  |
 | `display_ring_get` | ✓ |  |  |
 | `display_ring_stats` | ✓ |  |  |
+| `dithering` | ✓ |  | ✓ |
 | `dma_cdrom_history` | ✓ |  |  |
 | `dma_hold_ring` | ✓ |  | ✓ |
 | `dma_hold_stats` | ✓ |  | ✓ |
@@ -599,6 +604,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `exc_ring` |  | ✓ |  |
 | `first_failure` | ✓ | ✓ | ✓ |
 | `fmv_chroma` | ✓ |  | ✓ |
+| `fmv_hd` | ✓ |  |  |
 | `fmv_state` | ✓ |  |  |
 | `fn_clear` | ✓ |  |  |
 | `fn_disable` | ✓ |  |  |
@@ -622,7 +628,10 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `frame_perf` | ✓ |  |  |
 | `frame_range` | ✓ | ✓ | ✓ |
 | `frame_timeseries` | ✓ | ✓ | ✓ |
+| `frame_trace` | ✓ |  |  |
+| `frame_wall_ring` | ✓ |  |  |
 | `freeze_check` | ✓ |  |  |
+| `func_override` | ✓ |  |  |
 | `game_options` | ✓ |  |  |
 | `gcp_ring` | ✓ |  | ✓ |
 | `geom_correction` | ✓ |  | ✓ |
@@ -653,8 +662,14 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `hd_textures` | ✓ |  | ✓ |
 | `history` | ✓ | ✓ | ✓ |
 | `hle_dump` | ✓ |  | ✓ |
+| `host_button` | ✓ |  |  |
+| `host_key` | ✓ |  |  |
 | `host_launch_timings` | ✓ |  | ✓ |
+| `host_mouse` | ✓ |  |  |
+| `host_osd_shot` | ✓ |  |  |
+| `host_pause` | ✓ |  |  |
 | `host_profile` | ✓ |  |  |
+| `host_span_ring` | ✓ |  |  |
 | `idle_skip` | ✓ |  |  |
 | `imask_trace` | ✓ |  |  |
 | `input_route_append` | ✓ |  | ✓ |
@@ -679,9 +694,11 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `mdec_trace` | ✓ |  |  |
 | `mdec_trace_clear` | ✓ |  |  |
 | `mem_words` | ✓ |  |  |
+| `menu_host` | ✓ |  |  |
 | `mmio_clear` | ✓ |  | ✓ |
 | `mmio_dump` | ✓ |  | ✓ |
 | `mmx6_freshfix` | ✓ |  |  |
+| `mod_cmd` | ✓ |  | ✓ |
 | `mod_counters` | ✓ |  |  |
 | `nclip_stats` | ✓ |  |  |
 | `netplay_status` | ✓ |  |  |
@@ -690,6 +707,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `openxr_hands_override` | ✓ |  |  |
 | `openxr_input` | ✓ |  |  |
 | `openxr_input_override` | ✓ |  |  |
+| `openxr_pose_override` | ✓ |  |  |
 | `openxr_stats` | ✓ |  |  |
 | `openxr_views` | ✓ |  |  |
 | `overlay_candidates` | ✓ |  |  |
@@ -720,6 +738,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `pc_probe_arm` | ✓ |  |  |
 | `pc_probe_clear` | ✓ |  |  |
 | `pc_probe_dump` | ✓ |  |  |
+| `perf` | ✓ |  |  |
 | `pgxp` | ✓ |  | ✓ |
 | `pgxp_miss_ring` | ✓ |  |  |
 | `pgxp_shadow` | ✓ |  |  |
@@ -763,6 +782,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `rtrace_reset` |  | ✓ |  |
 | `rtrace_stats` | ✓ | ✓ |  |
 | `run_to_frame` | ✓ |  | ✓ |
+| `runtime_menu` | ✓ |  |  |
 | `s3_smear_watch` | ✓ |  | ✓ |
 | `savestate` | ✓ |  |  |
 | `savestate_status` | ✓ |  | ✓ |
@@ -772,6 +792,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `screenshot_hires` | ✓ |  | ✓ |
 | `screenshot_wide_hires` | ✓ |  | ✓ |
 | `segment_misses` | ✓ |  |  |
+| `session_restart` | ✓ |  |  |
 | `set_input` | ✓ | ✓ | ✓ |
 | `set_snapshot` | ✓ | ✓ | ✓ |
 | `sio_arm_audit` | ✓ |  |  |
@@ -819,6 +840,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `unwatch` | ✓ |  | ✓ |
 | `vblank_rate` | ✓ |  |  |
 | `video_info` | ✓ |  | ✓ |
+| `video_set` | ✓ |  |  |
 | `vk_perf` | ✓ |  |  |
 | `vram_peek` | ✓ | ✓ | ✓ |
 | `vsync_query_hle` | ✓ |  |  |
@@ -873,3 +895,16 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 
 `wtrace_dump pc_lo=<hex> pc_hi=<hex>` filters the recorded producer PC, masked to the physical address (KSEG0/KSEG1/KUSEG alias, like `addr_lo`/`addr_hi`), with inclusive lower and exclusive upper bounds, before limiting results. Omitted bounds match every entry; DMA entries use their recorded initiator, and a DMA whose initiator is unknown (0) never matches an explicit PC bound. Address/frame/order filters still apply.
 `disasm addr=<hex> count=<1..256>` inspects aligned guest instructions; default count is 16. Resolved targets use the guest PC. Unknown words are shown verbatim.
+
+## Trusted mod tuning commands
+
+| Command | Parameters | Behavior |
+|---|---|---|
+| `mod_cmd` | `name`, optional `args` | Calls a statically linked trusted debug callback and returns its integer `result` and escaped text `reply`. |
+
+The process owns up to 16 names, each 1-63 bytes. Registering the same name
+replaces its callback. Registration is independent of package activation;
+this is a debug-control registry, not a way to activate a disabled mod.
+Callbacks run on the debug-server thread and may only touch state guarded
+against its other owners. Guest/shared-state changes must be requested through
+the plugin's existing emulation callback and obey its session/netplay policy.

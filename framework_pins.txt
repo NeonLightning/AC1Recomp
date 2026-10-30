@@ -1,4 +1,6 @@
-psxrecomp=2a4824fc (2a4824fcb897cb635438958f0c8cffb5a27df656)
+psxrecomp-base=2a4824fc (2a4824fcb897cb635438958f0c8cffb5a27df656)
+psxrecomp-upstream=ffbd9d1c (ffbd9d1ca4ee698866a2a9d7c58c3cc29a77f111)
+psxrecomp-runtime=local compatibility layer; upstream runtime/UI migration pending
 recomp-ui=41c88ff (41c88ffea852b970af8d50312620b17404e455ad)
 recomp-net=e530593 (e53059306824edf4f0aec4aae5ae65151b18535f)
 retcomm-rbengine=2a03e73 (2a03e73693acee0fb78076ea058642c931bef12e)

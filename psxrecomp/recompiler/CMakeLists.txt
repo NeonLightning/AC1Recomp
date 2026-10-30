@@ -399,6 +399,14 @@ if(BUILD_TESTING)
     target_include_directories(guest_tty_test PRIVATE ../runtime/include)
     add_test(NAME guest_tty_test COMMAND guest_tty_test)
 
+    # MDEC status bit 29 stays set until a decode's output is down to the last
+    # 32-word OutFIFO load (Beetle InCommand); libpress DecDCTin spins on it.
+    add_executable(mdec_busy_drain_test
+        ../runtime/tests/test_mdec_busy_drain.c
+        ../runtime/src/mdec.c)
+    target_include_directories(mdec_busy_drain_test PRIVATE ../runtime/include)
+    add_test(NAME mdec_busy_drain_test COMMAND mdec_busy_drain_test)
+
     add_executable(debug_trace_ranges_test
         ../runtime/tests/test_debug_trace_ranges.c
         ../runtime/src/debug_trace_ranges.c
@@ -505,6 +513,28 @@ if(BUILD_TESTING)
     add_test(NAME signed_x_bound_codegen_test
              COMMAND signed_x_bound_codegen_test)
 
+    add_executable(mod_function_replacement_codegen_test
+        tests/mod_function_replacement_codegen_test.cpp
+        src/ps1_exe_parser.cpp
+        src/mips_decoder.cpp
+        src/control_flow.cpp
+        src/function_analysis.cpp
+        src/code_generator.cpp
+        src/pgxp_hook_emitter.cpp
+        src/annotations.cpp
+        src/bios_address_model.cpp
+        src/config_loader.cpp
+        src/recompiler_patch.cpp
+    )
+    target_include_directories(mod_function_replacement_codegen_test PRIVATE
+        include src lib/rabbitizer/include lib/rabbitizer/cplusplus/include
+        lib/fmt/include lib/toml11 lib/ELFIO)
+    target_link_libraries(mod_function_replacement_codegen_test PRIVATE fmt rabbitizer)
+    add_test(NAME mod_function_replacement_codegen_test
+             COMMAND mod_function_replacement_codegen_test)
+    set_tests_properties(mod_function_replacement_codegen_test PROPERTIES
+        ENVIRONMENT "PSX_CPS=1")
+
     add_executable(ws_cull_edge_codegen_test
         tests/ws_cull_edge_codegen_test.cpp
         src/ps1_exe_parser.cpp
@@ -588,6 +618,35 @@ if(BUILD_TESTING)
     add_test(NAME draw_distance_codegen_test
              COMMAND draw_distance_codegen_test)
 
+    # [[mod_immediate.sites]]: config rules, the per-selector switch emitted
+    # for loads, stores, ALU immediates and delay slots, the guards and the
+    # overlay-cache identity.
+    add_executable(mod_immediate_codegen_test
+        tests/mod_immediate_codegen_test.cpp
+        src/ps1_exe_parser.cpp
+        src/mips_decoder.cpp
+        src/control_flow.cpp
+        src/function_analysis.cpp
+        src/code_generator.cpp
+        src/pgxp_hook_emitter.cpp
+        src/annotations.cpp
+        src/bios_address_model.cpp
+        src/config_loader.cpp
+        src/recompiler_patch.cpp
+    )
+    target_include_directories(mod_immediate_codegen_test PRIVATE
+        include
+        src
+        lib/rabbitizer/include
+        lib/rabbitizer/cplusplus/include
+        lib/fmt/include
+        lib/toml11
+        lib/ELFIO
+    )
+    target_link_libraries(mod_immediate_codegen_test PRIVATE fmt rabbitizer)
+    add_test(NAME mod_immediate_codegen_test
+             COMMAND mod_immediate_codegen_test)
+
     # The same explicit cull kinds in the dirty-RAM interpreter: gpu.c's
     # sorted, capped site store and real interpreted bgez/bltz/branch-keep/
     # clip-edge instructions at margin 0 and at a forced margin. The test
@@ -643,6 +702,18 @@ if(BUILD_TESTING)
                  COMMAND draw_distance_interp_test
                          ${CMAKE_CURRENT_BINARY_DIR}/draw_distance_interp_stderr.txt)
     endif()
+
+    # [[mod_immediate.sites]] runtime store, selectors and word substitution
+    # (mod_immediate.c). The interpreter call site is pinned by
+    # runtime/tests/test_interp_mod_immediate_guards.py.
+    add_executable(mod_immediate_unit_test
+        ../runtime/tests/test_mod_immediate.c)
+    target_include_directories(mod_immediate_unit_test PRIVATE
+        ../runtime/include
+        ../runtime/src)
+    add_test(NAME mod_immediate_unit_test
+             COMMAND mod_immediate_unit_test
+                     ${CMAKE_CURRENT_BINARY_DIR}/mod_immediate_unit_stderr.txt)
 
     # Uncached (KSEG1) code charges a fetch before every instruction; cached
     # code keeps the line-leader rule (test_uncached_fetch_charge.py checks
@@ -781,6 +852,19 @@ if(BUILD_TESTING)
     )
     target_link_libraries(rewind_settings_test PRIVATE fmt)
     add_test(NAME rewind_settings_test COMMAND rewind_settings_test)
+    add_executable(jogcon_ffb_settings_test
+        tests/jogcon_ffb_settings_test.cpp
+        src/config_loader.cpp
+        src/ps1_exe_parser.cpp
+    )
+    target_include_directories(jogcon_ffb_settings_test PRIVATE
+        include
+        src
+        lib/fmt/include
+        lib/toml11
+    )
+    target_link_libraries(jogcon_ffb_settings_test PRIVATE fmt)
+    add_test(NAME jogcon_ffb_settings_test COMMAND jogcon_ffb_settings_test)
 
     # Launcher-saved paths stay relative inside a portable game folder.
     add_executable(portable_settings_paths_test
@@ -880,6 +964,28 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_enrich_overlay_captures.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # A walk root is a hard cap: a root inside another function splits it
+        # and still passes every audit. The classifier's no-split guard, the
+        # image-local enrichment proof, the recompiler's own guard on explicit
+        # roots, and the root policy's place in the cache namespace
+        # (beads-eio.3.177).
+        add_test(
+            NAME overlay_no_split_guard
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_overlay_no_split_guard.py
+                    --cmake ${CMAKE_COMMAND}
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
+        # Cross-image call evidence (main EXE, other captured images) roots
+        # an overlay function only where the overlay's own bytes prove the
+        # boundary (beads-eio.3.191, category a).
+        add_test(
+            NAME overlay_cross_image_calls
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_overlay_cross_image_calls.py
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
         # The runtime exe name must come from CMake, not be re-derived.
         add_test(
@@ -922,6 +1028,16 @@ if(BUILD_TESTING)
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_guard_word_analysis_bound.py
                     --recompiler $<TARGET_FILE:psxrecomp-game>
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # Request half of the same contract: no seed, alias or fragment demand
+        # may name the guard word (classifier, fragment jobs, hosted selection,
+        # fragment batches), and the recompiler warns when it drops a seed
+        # past Analysis End. Bead beads-eio.3.190 (AC3 fragment no-func-ids).
+        add_test(
+            NAME overlay_guard_word_requests
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_overlay_guard_word_requests.py
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         # Producer half of the same contract: the capture writer declares its
         # guard bytes and compile_overlays puts them in the PS-EXE tag the
         # recompiler reads.
@@ -953,12 +1069,19 @@ if(BUILD_TESTING)
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_cli_generate_aot_static.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         # psxrecomp_cli.py rebuild: the pre-build mtime clamp works without
-        # lutimes (Windows), and --cmake-extra wins over the shipping
-        # PSX_DEBUG_TOOLS=OFF default.
+        # lutimes (Windows), --cmake-extra wins over the shipping
+        # PSX_DEBUG_TOOLS=OFF default, and the build runs the configuring cmake.
         add_test(
             NAME cli_rebuild_host
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_cli_rebuild_host.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # update_disc_set.py writes in-project discs relative with '/' so one
+        # game.toml resolves on every host.
+        add_test(
+            NAME update_disc_set_paths
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_update_disc_set_paths.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         # runtime/overlay_static_sources.cmake: a declared-but-absent shard is
         # reported at configure, a profile/CMake disagreement is an error, and
@@ -1092,6 +1215,9 @@ if(BUILD_TESTING)
         # template, scaffold, check_generated.sh, Project Studio audit/ops).
         foreach(_t IN ITEMS
                 aligned_lzss_banks
+                bpe_container
+                audit_playtest_diagnostics_package
+                package_title_release
                 bundled_release_layout
                 collect_game_misses
                 cursor_writers
@@ -1114,6 +1240,22 @@ if(BUILD_TESTING)
                         ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_${_t}.py
                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         endforeach()
+        # Drives runtime/psx_playtest_diagnostics_defaults.cmake (a cmake -P
+        # script), so it needs this configure's cmake.
+        add_test(
+            NAME playtest_diagnostics_defaults
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_playtest_diagnostics_defaults.py
+                    --cmake ${CMAKE_COMMAND}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # Configures throwaway projects against runtime/psx_release_channel.cmake:
+        # a release-package build must name its channel.
+        add_test(
+            NAME release_channel_cmake
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_release_channel_cmake.py
+                    --cmake ${CMAKE_COMMAND}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
             NAME compile_overlays_static_split
             COMMAND ${Python3_EXECUTABLE}
@@ -1338,6 +1480,11 @@ if(BUILD_TESTING AND Python3_Interpreter_FOUND AND CMAKE_C_COMPILER_ID STREQUAL 
         COMMAND ${Python3_EXECUTABLE}
             "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_syscall_change_thread_self.py"
             --cc ${CMAKE_C_COMPILER})
+    # CloseTh(current); ChangeTh(other) still saves the outgoing registers.
+    add_test(NAME syscall_closed_thread_context
+        COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_syscall_closed_thread_context.py"
+            --cc ${CMAKE_C_COMPILER})
 endif()
 
 # Presentation capture ring: distinct-presentation dedupe and bounded slots.
@@ -1350,12 +1497,39 @@ if(BUILD_TESTING)
 endif()
 
 # ---- test-registration completeness guard -----------------------------------
+if(BUILD_TESTING)
+    add_executable(fast_forward_policy_test ../runtime/tests/test_fast_forward.c)
+    target_include_directories(fast_forward_policy_test PRIVATE ../runtime/include)
+    if(MSVC)
+        target_compile_options(fast_forward_policy_test PRIVATE /UNDEBUG)
+    else()
+        target_compile_options(fast_forward_policy_test PRIVATE -UNDEBUG)
+    endif()
+    if(NOT WIN32)
+        target_link_libraries(fast_forward_policy_test PRIVATE m)
+    endif()
+    add_test(NAME fast_forward_policy_test COMMAND fast_forward_policy_test)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME overlay_export_declarations
+            COMMAND ${Python3_EXECUTABLE} -I
+                ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_overlay_export_declarations.py)
+    endif()
+endif()
 if(BUILD_TESTING AND Python3_Interpreter_FOUND AND NOT MSVC)
     add_test(NAME gpu_upload_history
         COMMAND ${Python3_EXECUTABLE}
             "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_gpu_upload_history.py"
             --cc ${CMAKE_C_COMPILER})
 endif()
+
+# UTF-8 process code page on Windows for every shipped tool (issue #371): they
+# take disc/BIOS/output paths from argv and hand them to fopen/Win32 calls.
+include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/psx_windows_manifest.cmake)
+foreach(_psx_tool psxrecomp-game psxrecomp-toml psxrecomp psxrecomp-analyze psxrecomp-bios)
+    if(TARGET ${_psx_tool})
+        psxrecomp_windows_manifest(${_psx_tool})
+    endif()
+endforeach()
 
 # Reads both CMakeLists.txt files as text, so it catches an orphan in either
 # project from whichever one is being configured. Placed before the collision
