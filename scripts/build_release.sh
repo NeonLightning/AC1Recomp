@@ -12,7 +12,7 @@ cmake -S . -B "${BUILD_DIR}" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DPSX_ENABLE_VULKAN=ON \
   -DPSXRECOMP_REQUIRE_GAME_C=ON
-cmake --build "${BUILD_DIR}" --target psx-runtime -j"${BUILD_JOBS}"
+cmake --build "${BUILD_DIR}" --target psx-runtime psx-project-phantasma -j"${BUILD_JOBS}"
 
 export RELEASE_VERSION="$(tr -d '[:space:]' <VERSION)"
 exec scripts/package_release.sh \
