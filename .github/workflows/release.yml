@@ -524,7 +524,7 @@ jobs:
             for f in \
                 build-ci/build.ninja \
                 build-ci/compile_commands.json \
-                build-ci/CMakeFiles/psx-runtime.dir/flags.make; do
+                build-ci/CMakeFiles/psx-armored-core.dir/flags.make; do
               if [[ -f "${f}" ]] && grep -q "${define}" "${f}"; then
                 FOUND=1
                 echo "Found ${define} in ${f}"
@@ -532,11 +532,11 @@ jobs:
               fi
             done
             if [[ "${FOUND}" -ne 1 ]]; then
-              echo "::error::${define} missing from psx-runtime compile flags"
+              echo "::error::${define} missing from psx-armored-core compile flags"
               exit 1
             fi
           done
-          cmake --build build-ci --target psx-runtime -j"${JOBS}"
+          cmake --build build-ci --target psx-armored-core -j"${JOBS}"
           # Lobby list pin must match RELEASE_VERSION (the packager enforces).
           STAMP=""
           for cand in \

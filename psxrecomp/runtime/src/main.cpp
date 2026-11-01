@@ -7843,7 +7843,8 @@ static const char* const kScreenFilterChoices[] = { "Raw", "CRT", "Composite", "
 static const char* const kVsyncChoices[] = { "Off", "On", "Adaptive" };
 
 static int g_overlay_window_scale = 0;
-
+static int g_overlay_disc_sel = 1;
+static RecompRuntimeUiItem g_overlay_items[32];
 static int get_current_window_scale(void) {
     if (g_overlay_window_scale > 0)
         return g_overlay_window_scale;
@@ -8024,6 +8025,10 @@ static int psx_overlay_ui_get_value(void* ctx, const RecompRuntimeUiItem* item, 
     }
     if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_STATE_SLOT) == 0) {
         *value_out = savestate_menu_slot + 1;
+        return 1;
+    }
+    if (std::strcmp(item->key, "media.disc") == 0) {
+        *value_out = g_overlay_disc_sel;
         return 1;
     }
     return 0;
@@ -8212,6 +8217,10 @@ static int psx_overlay_ui_set_value(void* ctx, const RecompRuntimeUiItem* item, 
         savestate_menu_slot = std::max(0, std::min(11, value - 1));
         return 1;
     }
+    if (std::strcmp(item->key, "media.disc") == 0) {
+        g_overlay_disc_sel = std::max(1, std::min(cdrom_disc_roster_count(), value));
+        return 1;
+    }
     return 0;
 }
 
@@ -8229,6 +8238,19 @@ static int psx_overlay_ui_run_action(void* ctx, const RecompRuntimeUiItem* item)
     if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_LOAD_STATE) == 0) {
         savestate_submit_slot(savestate_menu_slot, 0);
         return 1;
+    }
+    if (std::strcmp(item->key, "media.insert") == 0) {
+        if (!cdrom_disc_select(g_overlay_disc_sel)) {
+            recomp_runtime_ui_set_status(g_psx_overlay_ui,
+                "Could not open that disc. Check its image files and try again.");
+            return 0;
+        }
+        char msg[48];
+        std::snprintf(msg, sizeof(msg), "Disc %d inserted", g_overlay_disc_sel);
+        host_osd_push(msg, 2000);
+        psx_overlay_ui_save(nullptr);
+        if (g_psx_overlay_ui) recomp_runtime_ui_close(g_psx_overlay_ui);
+        return 0;
     }
     if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_RESTART) == 0) {
         psx_restart_game();
@@ -8317,6 +8339,12 @@ static void psx_overlay_ui_save(void* ctx) {
     settings.has_audio_volume = true;
     settings.savestate_slot = savestate_menu_slot + 1;
     settings.has_savestate_slot = true;
+    if (cdrom_disc_roster_count() > 1 && cdrom_disc_selected() > 0) {
+        settings.disc_index = cdrom_disc_selected();
+        settings.has_disc_index = true;
+        settings.disc_path = cdrom_disc_roster_path(cdrom_disc_selected());
+        settings.has_disc_path = true;
+    }
     if (PSXRecompV4::save_user_settings(g_active_settings_path, settings))
         g_overlay_resolution_changed = false;
 }
@@ -8436,8 +8464,23 @@ static void psx_overlay_ensure_ui(void) {
     cfg.view_modes = RECOMP_RUNTIME_UI_VIEW_MODE_NATIVE | RECOMP_RUNTIME_UI_VIEW_MODE_FIXED_16_9;
     cfg.native_view_label = "4:3 Standard";
     cfg.fixed_view_label = "16:9 Widescreen";
-    cfg.extra_items = kOverlayExtraItems;
-    cfg.extra_item_count = sizeof(kOverlayExtraItems) / sizeof(kOverlayExtraItems[0]);
+    cfg.extra_items = g_overlay_items;
+    size_t item_count = 0;
+    for (const RecompRuntimeUiItem& it : kOverlayExtraItems)
+        g_overlay_items[item_count++] = it;
+    if (cdrom_disc_roster_count() > 1) {
+        g_overlay_items[item_count++] = {
+            "media.disc", "Disc", "Selected disc",
+            "Choose a disc, then select Insert disc and resume.",
+            RECOMP_RUNTIME_UI_INT, 1, cdrom_disc_roster_count(), 1, nullptr, 0, nullptr
+        };
+        g_overlay_items[item_count++] = {
+            "media.insert", "Disc", "Insert disc and resume",
+            "Change the disc while keeping your game running.",
+            RECOMP_RUNTIME_UI_ACTION, 0, 0, 0, nullptr, 0, nullptr
+        };
+    }
+    cfg.extra_item_count = item_count;
     g_psx_overlay_ui = recomp_runtime_ui_create_standard(&cfg);
 }
 
@@ -8452,6 +8495,7 @@ static void psx_overlay_toggle(SDL_Keycode opened_by_key) {
         return;
     }
     g_psx_overlay_open_key = opened_by_key;
+    g_overlay_disc_sel = cdrom_disc_selected() > 0 ? cdrom_disc_selected() : 1;
     recomp_runtime_ui_open(g_psx_overlay_ui);
 }
 

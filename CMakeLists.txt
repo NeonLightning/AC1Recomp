@@ -60,7 +60,7 @@ if(NOT IS_DIRECTORY "${PSX_PRELOADED_MODS}")
     set(PSX_PRELOADED_MODS "NONE")
 endif()
 
-psxrecomp_add_game_runtime(psx-runtime
+psxrecomp_add_game_runtime(psx-armored-core
     PRELOADED_MODS_DIR "${PSX_PRELOADED_MODS}"
     # ENABLE_NETPLAY_IF_PRESENT
     # NETPLAY_LOBBY_URL "ws://netplay.retcomm.net:8765"
@@ -92,14 +92,45 @@ psxrecomp_add_game_runtime(psx-project-phantasma
     CODEGEN_SETUP_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/games/project-phantasma"
 )
 
+psxrecomp_add_game_runtime(psx-master-of-arena
+    PRELOADED_MODS_DIR "${PSX_PRELOADED_MODS}"
+    ENABLE_SETUP_WIZARD
+    WINDOW_TITLE "Armored Core: Master of Arena"
+    EXE_NAME "ArmoredCoreMasterOfArena"
+    DEFAULT_GAME_CONFIG_PATH "games/master-of-arena/game.toml"
+    MAX_PLAYERS 1
+    APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/assets/psxrecomp.ico"
+    GEN_MARKER "games/master-of-arena/generated/SLUS_010.30_dispatch.c"
+    GEN_FULL_GLOB "games/master-of-arena/generated/SLUS_010.30_full_*.c"
+    CODEGEN_SETUP_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/games/master-of-arena/codegen_setup.c"
+    CODEGEN_SETUP_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/games/master-of-arena"
+)
+
+# Hub launcher: game picker, per-game disc and shared settings.
+set(AC_IMGUI "${CMAKE_CURRENT_SOURCE_DIR}/recomp-ui/src/third_party/imgui")
+add_executable(psx-launcher
+    launcher/main.cpp
+    recomp-ui/src/third_party/tinyfiledialogs.c
+    ${AC_IMGUI}/imgui.cpp
+    ${AC_IMGUI}/imgui_draw.cpp
+    ${AC_IMGUI}/imgui_tables.cpp
+    ${AC_IMGUI}/imgui_widgets.cpp
+    ${AC_IMGUI}/backends/imgui_impl_sdl3.cpp
+    ${AC_IMGUI}/backends/imgui_impl_opengl3.cpp)
+set_target_properties(psx-launcher PROPERTIES
+    OUTPUT_NAME ArmoredCoreLauncher CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+target_include_directories(psx-launcher PRIVATE ${AC_IMGUI} ${AC_IMGUI}/backends
+    ${CMAKE_CURRENT_SOURCE_DIR}/recomp-ui/src/third_party)
+target_link_libraries(psx-launcher PRIVATE ${PSX_SDL_LIBRARIES} ${CMAKE_DL_LIBS})
+
 # Stage runtime configs next to the exe for direct build/ launches. Only copy
 # files that exist — never fail POST_BUILD when game_options.toml is absent.
 foreach(_PSX_RUNTIME_CONFIG game.toml game_options.toml)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_PSX_RUNTIME_CONFIG}")
-        add_custom_command(TARGET psx-runtime POST_BUILD
+        add_custom_command(TARGET psx-armored-core POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${CMAKE_CURRENT_SOURCE_DIR}/${_PSX_RUNTIME_CONFIG}"
-                "$<TARGET_FILE_DIR:psx-runtime>/${_PSX_RUNTIME_CONFIG}"
+                "$<TARGET_FILE_DIR:psx-armored-core>/${_PSX_RUNTIME_CONFIG}"
             COMMENT "Staging ${_PSX_RUNTIME_CONFIG}"
             VERBATIM)
     endif()
@@ -111,11 +142,17 @@ configure_file(
     "${CMAKE_CURRENT_BINARY_DIR}/games/project-phantasma/game.toml"
     COPYONLY)
 
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/games/master-of-arena")
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/games/master-of-arena/game.toml"
+    "${CMAKE_CURRENT_BINARY_DIR}/games/master-of-arena/game.toml"
+    COPYONLY)
+
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/assets/ui")
-    add_custom_command(TARGET psx-runtime POST_BUILD
+    add_custom_command(TARGET psx-armored-core POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${CMAKE_CURRENT_SOURCE_DIR}/assets/ui"
-            "$<TARGET_FILE_DIR:psx-runtime>/assets/ui"
+            "$<TARGET_FILE_DIR:psx-armored-core>/assets/ui"
         COMMENT "Staging custom UI assets"
         VERBATIM)
 endif()

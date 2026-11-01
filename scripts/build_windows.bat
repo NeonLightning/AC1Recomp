@@ -14,7 +14,7 @@ cmake -S . -B "%BUILD_DIR%" -G Ninja ^
   -DPSX_ENABLE_VULKAN=ON ^
   -DPSXRECOMP_REQUIRE_GAME_C=ON || exit /b 1
 
-cmake --build "%BUILD_DIR%" --target psx-runtime -j %BUILD_JOBS% || exit /b 1
+cmake --build "%BUILD_DIR%" --target psx-armored-core psx-project-phantasma psx-master-of-arena psx-launcher -j %BUILD_JOBS% || exit /b 1
 
 rem Packaging is a bash script; needs Git Bash or MSYS2 bash on PATH.
 set "RECOMPILER_BUILD=%~2"

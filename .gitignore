@@ -71,7 +71,7 @@ CMakeCache.txt
 CMakeFiles/
 compile_commands.json
 
-# Runtime artifacts from psx-runtime launches
+# Runtime artifacts from psx-armored-core launches
 psx_crash.txt
 psx_last_run_report.json
 psx_screenshot.bmp

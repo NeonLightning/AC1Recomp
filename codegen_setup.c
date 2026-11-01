@@ -15,7 +15,7 @@ static const PsxrecompCodegenHostConfig kCodegenConfig = {
     .game_toml_relpath = "game.toml",
     .gen_marker_relpath = "generated/SCUS_941.82_dispatch.c",
     .build_dir_name = "build-release",
-    .cmake_target = "psx-runtime",
+    .cmake_target = "psx-armored-core",
     .exe_basename = "AC1",
     .prepare_note =
         "Uses your legal disc with the local psxrecomp SDK to generate "

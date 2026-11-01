@@ -21,7 +21,7 @@ if [[ -n "${TOOLCHAIN_FILE}" ]]; then
 fi
 
 cmake "${args[@]}"
-cmake --build "${BUILD_DIR}" --target psx-runtime psx-project-phantasma -j"${BUILD_JOBS}"
+cmake --build "${BUILD_DIR}" --target psx-armored-core psx-project-phantasma psx-master-of-arena psx-launcher -j"${BUILD_JOBS}"
 
 # The bundled overlay toolchain needs a Windows psxrecomp-game.exe.
 RECOMPILER_BUILD="${2:-build-recompiler-windows}"

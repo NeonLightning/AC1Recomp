@@ -27,13 +27,17 @@ The engine runtime and launcher UI are fully vendored in-tree. Configure and bui
 # Configure release build with Vulkan support
 cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DPSX_ENABLE_VULKAN=ON
 
-# Compile both game executables
-cmake --build build-release --target psx-runtime psx-project-phantasma -j$(nproc)
+# Compile all game executables
+cmake --build build-release --target psx-armored-core psx-project-phantasma psx-master-of-arena psx-launcher -j$(nproc)
 ```
 
-The executables are `build-release/AC1` and
-`build-release/ArmoredCoreProjectPhantasma`. Run `./launch.sh` from the project
-root for a title-selection menu, or launch either executable directly.
+The executables are `build-release/AC1`,
+`build-release/ArmoredCoreProjectPhantasma` and
+`build-release/ArmoredCoreMasterOfArena`. Run `./launch.sh` from the project
+root for the graphical launcher (game, disc and shared settings), or launch any executable directly.
+
+Armored Core: Master of Arena uses the USA `SLUS-01030` (Disc 1) and
+`SLUS-01081` (Disc 2) profile; pick the disc in its launcher's Disc Selection.
 
 Project Phantasma uses the USA `SLUS-00670` profile. Keep your legally dumped
 disc in the configured local disc path or select it in that title's launcher;
