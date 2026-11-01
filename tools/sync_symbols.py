@@ -26,8 +26,8 @@ except ModuleNotFoundError:  # pragma: no cover
         raise SystemExit(2)
 
 ROOT = pathlib.Path.cwd()
-SYMBOLS_PATH = ROOT / "symbols.toml"
-HEADER_PATH = ROOT / "psx_symbols.h"
+SYMBOLS_PATH = ROOT / "games" / "armored-core" / "symbols.toml"
+HEADER_PATH = ROOT / "games" / "armored-core" / "psx_symbols.h"
 
 
 def _parse_int(value) -> int:

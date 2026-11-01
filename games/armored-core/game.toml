@@ -5,8 +5,8 @@
 name = "AC1"
 id = "SCUS-94182"
 players = 1
-exe = "disc/SCUS_941.82"
-disc = "disc/AC1.cue"
+exe = "games/armored-core/disc/SCUS_941.82"
+disc = "games/armored-core/disc/Armored Core.cue"
 load_address = "0x80011000"
 entry_pc = "0x80011E6C"
 text_size = "0x00029000"
@@ -14,9 +14,9 @@ stack_base = "0x801FFFF0"
 
 # Digests are for data Track 01 (first BINARY FILE / TRACK 01).
 [prepare_disc]
-out_dir = "disc"
-bin_name = "AC1.bin"
-cue_name = "AC1.cue"
+out_dir = "games/armored-core/disc"
+bin_name = "Armored Core.bin"
+cue_name = "Armored Core.cue"
 boot_exe = "SCUS_941.82"
 known_sizes = [524759424]
 known_md5 = [
@@ -30,8 +30,8 @@ known_crc32 = [
 ]
 
 [recompiler]
-seeds = "seeds/ghidra_funcs.txt"
-out_dir = "generated"
+seeds = "games/armored-core/seeds/ghidra_funcs.txt"
+out_dir = "games/armored-core/generated"
 strict = true
 
 [runtime]

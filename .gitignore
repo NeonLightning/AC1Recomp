@@ -84,6 +84,6 @@ starvation_dump.jsonl
 /*.json
 /*.bmp
 /*.png
-!/catalog_identity.json
+!/games/*/catalog_identity.json
 !/disc_probe.json
 !/.recomp.json

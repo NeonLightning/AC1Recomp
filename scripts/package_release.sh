@@ -1,62 +1,100 @@
 #!/usr/bin/env bash
-# Thin wrapper around the shared psxrecomp bundled-release packager.
-# Autofilled by tools/new_project_layout/setup_project.{sh,ps1}.
+# Packages the launcher and all three games from a built runtime folder into
+# <name>.zip (Windows) or <name>.tar.gz (Linux) under dist/.
 #
-# Ships the COMPILED game built from this repo's committed generated/ C:
-# executable, runtime data, bundled OpenBIOS, mod catalog, overlay toolchain.
-# No sources, emitters, CLI, generated C, or BIOS dumps.
+# Usage: scripts/package_release.sh <runtime-dir> <artifact-tag>
+#   runtime-dir   folder holding the built executables (CMake build dir or build-release/)
+#   artifact-tag  linux-x64 | windows-x64
 #
-# Usage:
-#   scripts/package_release.sh <build-dir> <artifact-tag> [recompiler-build-dir]
-#
-# Writes: dist/ac1-<VERSION>-<artifact-tag>.zip
+# Windows DLLs are taken from the runtime dir plus any dirs listed in
+# PSXRECOMP_RUNTIME_BIN_DIR (":"-separated) and the MinGW runtime.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BUILD_DIR="${1:-}"
-ARTIFACT_TAG="${2:-}"
-RECOMPILER_BUILD="${3:-build-recompiler}"
+RUNTIME_DIR="${1:?usage: $0 <runtime-dir> <artifact-tag>}"
+TAG="${2:?usage: $0 <runtime-dir> <artifact-tag>}"
+cd "${ROOT}"
 
-if [[ -z "${BUILD_DIR}" || -z "${ARTIFACT_TAG}" ]]; then
-  echo "usage: $0 <build-dir> <artifact-tag> [recompiler-build-dir]" >&2
-  exit 2
-fi
+VERSION="${RELEASE_VERSION:-$(tr -d '[:space:]' <VERSION)}"
+NAME="armored-core-recomp-${VERSION}-${TAG}"
+STAGE="${ROOT}/dist/stage/${NAME}"
+EXT=""
+[[ "${TAG}" == windows* ]] && EXT=".exe"
 
-PACKAGER="${ROOT}/psxrecomp/tools/package_game_release.sh"
-if [[ ! -f "${PACKAGER}" ]]; then
-  echo "error: missing ${PACKAGER} (psxrecomp submodule predates bundled releases -- bump it)" >&2
-  exit 1
-fi
-chmod +x "${PACKAGER}" 2>/dev/null || true
-
-EXTRA=()
-# Overlay shard cache. It is compiled FROM THE DISC, so CI (no disc) cannot
-# build one: the committed static AOT shard is linked into the executable and
-# the bundled overlay_toolchain/ compiles the rest from the player's disc at
-# runtime. A developer packaging locally with a cache can ship it instead:
-#   PSX_OVERLAY_CACHE_ROOT=/path/to/cache scripts/package_release.sh ...
-if [[ -n "${PSX_OVERLAY_CACHE_ROOT:-}" ]]; then
-  EXTRA+=(--overlay-cache-root "${PSX_OVERLAY_CACHE_ROOT}")
-else
-  EXTRA+=(--ship-without-overlay-cache-because \
-    "no disc at package time: the committed static AOT shard is compiled in and overlay_toolchain/ autocompiles the rest on the player's machine")
-fi
-# Extra docs shipped at the zip root (DISC.md tells players which dump works).
-for _doc in DISC.md; do
-  if [[ -f "${ROOT}/${_doc}" ]]; then
-    EXTRA+=(--doc "${_doc}")
-  fi
+EXES=(ArmoredCoreLauncher AC1 ArmoredCoreProjectPhantasma ArmoredCoreMasterOfArena)
+for exe in "${EXES[@]}"; do
+  [[ -f "${RUNTIME_DIR}/${exe}${EXT}" ]] || { echo "error: ${RUNTIME_DIR}/${exe}${EXT} not found" >&2; exit 1; }
 done
 
-cd "${ROOT}"
-exec bash "${PACKAGER}" \
-  --root "${ROOT}" \
-  --build-dir "${BUILD_DIR}" \
-  --artifact "${ARTIFACT_TAG}" \
-  --zip-prefix ac1 \
-  --exe-name AC1 \
-  --display-name "AC1" \
-  --recompiler-build "${RECOMPILER_BUILD}" \
-  --version-env RELEASE_VERSION \
-  --disc-hint "your legally owned AC1 disc" \
-  "${EXTRA[@]}"
+rm -rf "${STAGE}"
+mkdir -p "${STAGE}"
+
+# Runnable files only: no CMake/Ninja state, build metadata, or this machine's settings.
+rsync -a \
+  --exclude='CMakeFiles/' --exclude='CMakeCache.txt' --exclude='build.ninja' \
+  --exclude='cmake_install.cmake' --exclude='.ninja_*' --exclude='*_vkgen/' \
+  --exclude='*.a' --exclude='*.c' --exclude='*.rc' --exclude='*_generated_sources.txt' \
+  --exclude='psx_mod_catalog_*.txt' --exclude='psxrecomp_*.txt' \
+  --exclude='Testing/' --exclude='CTestTestfile.cmake' --exclude='_deps/' --exclude='psx_execution/' \
+  --exclude='launcher.ini' --exclude='launcher-window.ini' --exclude='config.ini' \
+  --exclude='settings.toml' --exclude='keybinds.ini' --exclude='input.ini' \
+  --exclude='disc.cfg' --exclude='bios.cfg' --exclude='rom.cfg' \
+  --exclude='saves/' --exclude='*.log' --exclude='psx_crash.txt' \
+  --exclude='psx_last_run_report.json' \
+  "${RUNTIME_DIR}"/ "${STAGE}"/
+
+if [[ -n "${EXT}" ]]; then
+  IFS=':' read -r -a dll_dirs <<<"${PSXRECOMP_RUNTIME_BIN_DIR:-}"
+  dll_dirs+=("${RUNTIME_DIR}" /usr/x86_64-w64-mingw32/bin)
+  for d in "${dll_dirs[@]}"; do
+    [[ -d "${d}" ]] || continue
+    for dll in SDL3.dll libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll; do
+      [[ -f "${d}/${dll}" && ! -f "${STAGE}/${dll}" ]] && cp "${d}/${dll}" "${STAGE}/"
+    done
+  done
+fi
+
+# Discs are the player's own: each game gets an empty disc folder with a note.
+declare -A DISC_NOTE=(
+  [armored-core]="Armored Core (USA, SCUS-94182): Armored Core.cue + Armored Core.bin"
+  [project-phantasma]="Armored Core: Project Phantasma (USA, SLUS-00670): Armored Core - Project Phantasma (USA).cue + .bin"
+  [master-of-arena]="Armored Core: Master of Arena (USA, SLUS-01030 and SLUS-01081): Armored Core - Master of Arena (USA) (Disc 1).cue/.bin and (Disc 2).cue/.bin"
+)
+for id in "${!DISC_NOTE[@]}"; do
+  [[ -f "${STAGE}/games/${id}/game.toml" ]] || { echo "error: games/${id}/game.toml missing from ${RUNTIME_DIR}" >&2; exit 1; }
+  mkdir -p "${STAGE}/games/${id}/disc"
+  printf 'Put your legally owned disc image here, or pick it in the launcher.\n\n%s\n' \
+    "${DISC_NOTE[$id]}" >"${STAGE}/games/${id}/disc/README.txt"
+done
+
+mkdir -p "${STAGE}/licenses"
+cp psxrecomp/LICENSE "${STAGE}/licenses/psxrecomp-LICENSE.txt"
+cp psxrecomp/THIRD_PARTY_ATTRIBUTION.md "${STAGE}/licenses/THIRD_PARTY_ATTRIBUTION.md"
+cp recomp-ui/LICENSE "${STAGE}/licenses/recomp-ui-LICENSE.txt"
+
+LAUNCH="ArmoredCoreLauncher${EXT}"
+cat >"${STAGE}/README.txt" <<EOF
+Armored Core Recomp ${VERSION} (${TAG})
+
+Run ${LAUNCH}. Pick a game, set its disc image, adjust the settings and
+controls shared by every game, then press PLAY.
+
+Games: Armored Core, Armored Core: Project Phantasma, Armored Core: Master of Arena.
+You need your own legally owned discs; none are included. Disc folders are in
+games/<game>/disc/. Memory cards are stored in saves/ and shared by all games.
+
+Each game also has its own executable (${EXES[1]}${EXT}, ${EXES[2]}${EXT}, ${EXES[3]}${EXT}).
+EOF
+
+mkdir -p dist
+if [[ -n "${EXT}" ]]; then
+  ARCHIVE="${NAME}.zip"
+  rm -f "dist/${ARCHIVE}"
+  (cd dist/stage && zip -qr "../${ARCHIVE}" "${NAME}")
+else
+  ARCHIVE="${NAME}.tar.gz"
+  rm -f "dist/${ARCHIVE}"
+  (cd dist/stage && tar -czf "../${ARCHIVE}" "${NAME}")
+fi
+rm -rf dist/stage
+echo "Wrote dist/${ARCHIVE}"

@@ -133,4 +133,4 @@ When starting the application without skipping the launcher, the GUI offers addi
 - **Audio & System**: Mute or adjust audio, select host frequency, choose the savestate slot, manage memory cards, and switch disc images.
 - **System settings**: Choose **Fast boot** to skip the BIOS startup sequence and **HLE BIOS** to enable high-level BIOS services; these match the in-game controls and persist in `settings.toml`.
 
-Settings are saved automatically to [game.toml](game.toml) defaults and your user profile in `settings.toml`.
+Settings are saved automatically to [game.toml](games/armored-core/game.toml) defaults and your user profile in `settings.toml`.

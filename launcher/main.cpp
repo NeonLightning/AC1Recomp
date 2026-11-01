@@ -41,7 +41,7 @@ struct GameDef {
 };
 
 static const GameDef kGames[] = {
-    {"armored-core", "Armored Core", "AC1", ""},
+    {"armored-core", "Armored Core", "AC1", "games/armored-core"},
     {"project-phantasma", "Project Phantasma", "ArmoredCoreProjectPhantasma", "games/project-phantasma"},
     {"master-of-arena", "Master of Arena", "ArmoredCoreMasterOfArena", "games/master-of-arena"},
 };

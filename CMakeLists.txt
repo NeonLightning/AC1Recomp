@@ -66,16 +66,17 @@ psxrecomp_add_game_runtime(psx-armored-core
     # NETPLAY_LOBBY_URL "ws://netplay.retcomm.net:8765"
     ENABLE_SETUP_WIZARD
     WINDOW_TITLE "AC1"
-    DEFAULT_GAME_CONFIG_PATH "game.toml"
+    DEFAULT_GAME_CONFIG_PATH "games/armored-core/game.toml"
     MAX_PLAYERS 1
     # LAUNCHER_BOXART "${CMAKE_CURRENT_SOURCE_DIR}/launcher_assets/img/boxart.tga"
     APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/assets/psxrecomp.ico"
     # Committed game C (psxrecomp_cli.py generate; git add generated). Release
     # CI configures with -DPSXRECOMP_REQUIRE_GAME_C=ON so a checkout without
     # it fails instead of building a setup host.
-    GEN_MARKER "generated/SCUS_941.82_dispatch.c"
-    GEN_FULL_GLOB "generated/SCUS_941.82_full_*.c"
-    CODEGEN_SETUP_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/codegen_setup.c"
+    GEN_MARKER "games/armored-core/generated/SCUS_941.82_dispatch.c"
+    GEN_FULL_GLOB "games/armored-core/generated/SCUS_941.82_full_*.c"
+    CODEGEN_SETUP_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/games/armored-core/codegen_setup.c"
+    CODEGEN_SETUP_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/games/armored-core"
 )
 
 psxrecomp_add_game_runtime(psx-project-phantasma
@@ -123,17 +124,18 @@ target_include_directories(psx-launcher PRIVATE ${AC_IMGUI} ${AC_IMGUI}/backends
     ${CMAKE_CURRENT_SOURCE_DIR}/recomp-ui/src/third_party)
 target_link_libraries(psx-launcher PRIVATE ${PSX_SDL_LIBRARIES} ${CMAKE_DL_LIBS})
 
-# Stage runtime configs next to the exe for direct build/ launches. Only copy
-# files that exist — never fail POST_BUILD when game_options.toml is absent.
-foreach(_PSX_RUNTIME_CONFIG game.toml game_options.toml)
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_PSX_RUNTIME_CONFIG}")
-        add_custom_command(TARGET psx-armored-core POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${CMAKE_CURRENT_SOURCE_DIR}/${_PSX_RUNTIME_CONFIG}"
-                "$<TARGET_FILE_DIR:psx-armored-core>/${_PSX_RUNTIME_CONFIG}"
-            COMMENT "Staging ${_PSX_RUNTIME_CONFIG}"
-            VERBATIM)
-    endif()
+# Parallel target builds each stage into these; create them before any runs.
+foreach(_PSX_STAGE_DIR bios assets mods)
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${_PSX_STAGE_DIR}")
+endforeach()
+
+# Stage each game's config next to its settings in <build>/games/<id>/.
+foreach(_PSX_AC_CONFIG game.toml game_options.toml)
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/games/armored-core")
+    configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/games/armored-core/${_PSX_AC_CONFIG}"
+        "${CMAKE_CURRENT_BINARY_DIR}/games/armored-core/${_PSX_AC_CONFIG}"
+        COPYONLY)
 endforeach()
 
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/games/project-phantasma")
