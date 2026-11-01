@@ -36,6 +36,8 @@ The executables are `build-release/AC1`,
 `build-release/ArmoredCoreMasterOfArena`. Run `./launch.sh` from the project
 root for the graphical launcher (game, disc and shared settings), or launch any executable directly.
 
+Armored Core uses the USA `SCUS-94182` disc.
+
 Armored Core: Master of Arena uses the USA `SLUS-01030` (Disc 1) and
 `SLUS-01081` (Disc 2) profile; pick the disc in its launcher's Disc Selection.
 
