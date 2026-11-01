@@ -1,6 +1,6 @@
 # Armored Core (PSX Recompilation)
 
-A native PC port of **Armored Core** (USA / SCUS-94182) generated via static recompilation with enhanced rendering, widescreen support, customizable controls, and in-game settings.
+A native PC port of all three **Armored Core** games for playstation 1. Generated via static recompilation with enhanced rendering, widescreen support, customizable controls, and in-game settings.
 
 ---
 
