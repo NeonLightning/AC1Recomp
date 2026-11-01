@@ -30,6 +30,9 @@ def main():
         payload, cache, remote, tmp = [work / name for name in ("payload with.space", "cache", "remote", "tmp")]
         for directory in (payload,cache,remote,tmp): directory.mkdir()
         (payload / "assets").mkdir()
+        (payload / "bios").mkdir()
+        (payload / "bios/openbios.bin").write_bytes(b"fixture OpenBIOS")
+        (payload / "bios/OpenBIOS.LICENSE").write_text("fixture license\n")
         original = b"\x7fELF" + identity.encode() + b"original payload bytes"
         (payload / "Game").write_bytes(original)
         (payload / "Game.execution.json").write_text(json.dumps(manifest))
@@ -66,6 +69,8 @@ def main():
         assert bound["binary_sha256"] != manifest["binary_sha256"]
         assert (appdir / "usr/bin/assets").is_symlink()
         assert not (appdir / "usr/share/fixture/Game").exists()
+        assert (appdir / "usr/share/fixture/bios/openbios.bin").read_bytes() == b"fixture OpenBIOS"
+        assert (appdir / "usr/share/fixture/bios/OpenBIOS.LICENSE").is_file()
         assert output.is_file() and Path(str(output)+".sha256").is_file()
         for name in tools: assert (cache / name).read_bytes() == (remote / name).read_bytes()
         # A bad build contract must fail before the stand-in compressor runs.
@@ -78,6 +83,16 @@ def main():
         (payload / "wrong.dll").write_bytes(b"Windows cache")
         result = run(failed)
         assert result.returncode != 0 and "Windows binaries/cache" in result.stderr
+        manifest["identity"] = identity
+        (payload / "Game.execution.json").write_text(json.dumps(manifest))
+        (payload / "wrong.dll").unlink()
+        (payload / "game.toml").unlink()
+        (payload / "games/fixture").mkdir(parents=True)
+        (payload / "games/fixture/game.toml").write_text("[game]\nname='Fixture'\n")
+        multi_title = work / "multi-title.AppImage"
+        result = run(multi_title)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert multi_title.is_file()
     print("PASS AppImage routing: verified tools, post-deploy final bytes, no stale hash, fail closed")
 
 

@@ -59,6 +59,20 @@ build directory, artifact tag, or recompiler build directory:
 scripts/build_release.sh build-release linux-x64 psxrecomp/recompiler/build
 ```
 
+To build a Linux x86_64 AppImage instead, run:
+
+```bash
+scripts/build_appimage.sh
+```
+
+The AppImage is written to `dist/armored-core-recomp-<version>-linux-x64.AppImage`.
+It downloads the pinned AppImage packaging tools on first use and caches them
+under `${XDG_CACHE_HOME:-~/.cache}/recomp-appimage-tools`. User settings, disc
+selection, memory cards, and saves live under `${XDG_DATA_HOME:-~/.local/share}/armored-core-recomp`;
+existing writable data is carried forward when the packaged runtime changes.
+The bundled OpenBIOS image and license are included; a retail PS1 BIOS dump is
+not included and must be supplied by the user if selected.
+
 ---
 
 ## In-Game Settings Overlay

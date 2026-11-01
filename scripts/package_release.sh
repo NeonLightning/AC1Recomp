@@ -2,7 +2,7 @@
 # Packages the launcher and all three games from a built runtime folder into
 # <name>.zip (Windows) or <name>.tar.gz (Linux) under dist/.
 #
-# Usage: scripts/package_release.sh <runtime-dir> <artifact-tag>
+# Usage: scripts/package_release.sh <runtime-dir> <artifact-tag> [--stage-only]
 #   runtime-dir   folder holding the built executables (CMake build dir or build-release/)
 #   artifact-tag  linux-x64 | windows-x64
 #
@@ -13,6 +13,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RUNTIME_DIR="${1:?usage: $0 <runtime-dir> <artifact-tag>}"
 TAG="${2:?usage: $0 <runtime-dir> <artifact-tag>}"
+STAGE_ONLY="${3:-}"
+[[ -z "${STAGE_ONLY}" || "${STAGE_ONLY}" == --stage-only ]] || {
+  echo "error: unknown option ${STAGE_ONLY}" >&2; exit 2;
+}
 cd "${ROOT}"
 
 VERSION="${RELEASE_VERSION:-$(tr -d '[:space:]' <VERSION)}"
@@ -82,9 +86,16 @@ controls shared by every game, then press PLAY.
 Games: Armored Core, Armored Core: Project Phantasma, Armored Core: Master of Arena.
 You need your own legally owned discs; none are included. Disc folders are in
 games/<game>/disc/. Memory cards are stored in saves/ and shared by all games.
+OpenBIOS and its license are included in bios/. A retail PS1 BIOS dump is not
+included; select your own legally obtained dump in the launcher if desired.
 
 Each game also has its own executable (${EXES[1]}${EXT}, ${EXES[2]}${EXT}, ${EXES[3]}${EXT}).
 EOF
+
+if [[ "${STAGE_ONLY}" == --stage-only ]]; then
+  echo "Staged ${STAGE}"
+  exit 0
+fi
 
 mkdir -p dist
 if [[ -n "${EXT}" ]]; then

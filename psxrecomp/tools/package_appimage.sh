@@ -50,7 +50,11 @@ FRAMEWORK="$(cd "$FRAMEWORK" && pwd)"
 for file in "$APP_RUN" "$DESKTOP" "$ICON" "$PAYLOAD/$EXE_NAME" "$PAYLOAD/$EXE_NAME.execution.json"; do
   [[ -f "$file" ]] || { echo "missing ${file}" >&2; exit 1; }
 done
-[[ -d "$PAYLOAD/assets" && -f "$PAYLOAD/game.toml" ]] || {
+GAME_CONFIG="$PAYLOAD/game.toml"
+if [[ ! -f "$GAME_CONFIG" && -d "$PAYLOAD/games" ]]; then
+  GAME_CONFIG="$(find "$PAYLOAD/games" -mindepth 2 -maxdepth 2 -type f -name game.toml -print -quit)"
+fi
+[[ -d "$PAYLOAD/assets" && -n "$GAME_CONFIG" ]] || {
   echo "payload is missing staged runtime assets/config" >&2; exit 1;
 }
 DESKTOP_ID="$(basename "$DESKTOP" .desktop)"
